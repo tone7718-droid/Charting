@@ -26,11 +26,8 @@
    https://github.com/tone7718-droid/Charting/releases/tag/latest
    - `TherapyChartSetup.exe` — 설치 프로그램 (바탕화면 바로가기 생성)
    - `TherapyChart.exe` — 설치 없이 바로 실행
-2. 또는 GitHub 저장소의 **Actions** 탭 → 가장 최근의 **Build Windows EXE** 실행 클릭
-2. 하단 **Artifacts**에서 다운로드:
-   - `TherapyChart-installer` — **설치 프로그램** (권장): 실행하면 설치 경로 선택,
-     바탕화면 바로가기 생성, 시작 메뉴 등록, 제거 기능까지 제공
-   - `TherapyChart-exe` — 단일 EXE: 압축을 풀어 바탕화면에 두고 바로 실행
+2. 또는 GitHub 저장소의 **Actions** 탭(로그인 필요) → 가장 최근의 **Build Windows EXE** 실행 클릭
+   → 하단 **Artifacts**에서 `TherapyChart-installer` 또는 `TherapyChart-exe` 다운로드
 3. Python 등 별도 프로그램 설치가 필요 없으며, 인터넷 연결 없이 동작합니다.
 
 > 처음 실행 시 Windows SmartScreen 경고가 뜨면 "추가 정보 → 실행"을 누르세요.
