@@ -7,7 +7,7 @@
 
 APP_NAME = "도수치료 진료 기록지 입력 도우미"
 APP_ID = "TherapyChart"  # 데이터 폴더 이름 등에 사용
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 # ---------------------------------------------------------------------------
 # 기본 치료 목적 (다중 선택 토글)
@@ -34,6 +34,9 @@ DEFAULT_TECHNIQUES = [
 # 1차 버전 기본 치료 시간(분). 설정 파일에 저장되어 추후 변경 가능한 구조.
 DEFAULT_TREATMENT_MINUTES = 30
 
+# 치료 효과 평가 — 주관적 호전도 선택지 (단일 선택)
+IMPROVEMENT_OPTIONS = ["호전", "유지", "악화"]
+
 # 최근 사용 목록 최대 보관 개수
 RECENT_LIMIT = 15
 
@@ -47,6 +50,7 @@ LABEL_DATE = "시행일시"
 LABEL_COUNT = "시행횟수"
 LABEL_REGION = "시행부위"
 LABEL_TECHNIQUE = "시행기법"
+LABEL_EVAL = "치료 효과 평가"
 LABEL_MINUTES = "치료시간"
 
 # 필수 항목 검사 시 안내 순서

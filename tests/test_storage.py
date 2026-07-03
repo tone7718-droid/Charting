@@ -54,6 +54,41 @@ class TestSettingsRoundtrip(StorageTestCase):
         self.assertEqual(settings["treatment_minutes"], 30)
 
 
+class TestCoerceSettings(StorageTestCase):
+    def test_wrong_types_fall_back_without_crashing(self):
+        bad = storage.merge_with_defaults({
+            "purposes": None,
+            "treatment_minutes": "삼십",
+            "therapists": "홍길동",       # 문자열(리스트 아님)
+            "remember_geometry": "yes",  # 불리언 아님
+        })
+        self.assertEqual(bad["purposes"], storage.default_settings()["purposes"])
+        self.assertEqual(bad["treatment_minutes"], 30)
+        self.assertEqual(bad["therapists"], [])
+        self.assertIs(bad["remember_geometry"], True)
+
+    def test_minutes_clamped_to_range(self):
+        self.assertEqual(storage.merge_with_defaults({"treatment_minutes": 9999})["treatment_minutes"], 600)
+        self.assertEqual(storage.merge_with_defaults({"treatment_minutes": 0})["treatment_minutes"], 1)
+        self.assertEqual(storage.merge_with_defaults({"treatment_minutes": 45})["treatment_minutes"], 45)
+        # 숫자로 해석 불가한 값은 기본값(30)으로
+        self.assertEqual(storage.merge_with_defaults({"treatment_minutes": "삼십"})["treatment_minutes"], 30)
+
+    def test_diagnoses_filtered_to_valid_dicts(self):
+        merged = storage.merge_with_defaults({
+            "diagnoses": [{"code": "m1", "name": "x"}, "not a dict", 123, {"name": "y"}]
+        })
+        self.assertEqual(len(merged["diagnoses"]), 2)
+        self.assertTrue(all(set(d) == {"code", "name", "favorite"} for d in merged["diagnoses"]))
+
+    def test_bad_settings_file_loads_without_crash(self):
+        with open(storage.settings_file(), "w", encoding="utf-8") as f:
+            json.dump({"purposes": None, "treatment_minutes": "x"}, f)
+        settings = storage.load_settings()  # 크래시 없이 복구되어야 함
+        self.assertIsInstance(settings["purposes"], list)
+        self.assertEqual(settings["treatment_minutes"], 30)
+
+
 class TestPushRecent(StorageTestCase):
     def test_moves_to_front_without_duplicates(self):
         items = storage.push_recent(["허리", "경추"], "경추")
@@ -85,6 +120,13 @@ class TestDiagnosesCsv(StorageTestCase):
         path = self._write_csv("code,name\nM751,회전근개증후군\n", encoding="utf-8-sig")
         items, _ = storage.import_diagnoses_csv(path)
         self.assertEqual(items[0]["code"], "M751")
+
+    def test_import_cp949(self):
+        # 한글 Windows 엑셀 기본 저장 인코딩
+        path = self._write_csv("진단코드,진단명\nM751,회전근개증후군\nM545,요통\n", encoding="cp949")
+        items, _ = storage.import_diagnoses_csv(path)
+        self.assertEqual(items[0]["name"], "회전근개증후군")
+        self.assertEqual(items[1]["name"], "요통")
 
     def test_import_invalid_file_raises_without_crash(self):
         path = self._write_csv("\n\n\n")
@@ -137,9 +179,10 @@ class TestBackupRestore(StorageTestCase):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         forbidden = {"patient", "환자", "주민등록번호", "차트번호", "연락처", "주소"}
-        for key in data.keys():
-            for word in forbidden:
-                self.assertNotIn(word, key)
+        # 키뿐 아니라 전체 직렬화 문자열(중첩 값 포함)에도 환자정보 표지가 없어야 함
+        serialized = json.dumps(data, ensure_ascii=False)
+        for word in forbidden:
+            self.assertNotIn(word, serialized)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ a = Analysis(
     ['therapy_chart_app.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('assets/icon.ico', 'assets')],  # 창 아이콘 리소스 번들
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -37,4 +37,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/icon.ico',  # EXE 파일 아이콘
 )

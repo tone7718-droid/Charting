@@ -218,7 +218,15 @@ class ScrollableFrame(ttk.Frame):
 
         def on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            return "break"
 
-        # 마우스가 이 영역 위에 있을 때만 휠 스크롤 동작
-        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", on_mousewheel))
-        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+        # 이 캔버스와 내부 위젯에만 휠 바인딩 (bind_all/unbind_all은
+        # 앱 전역 바인딩을 건드리므로 위젯 스코프로 한정한다)
+        def bind_wheel(widget):
+            widget.bind("<MouseWheel>", on_mousewheel)
+            for child in widget.winfo_children():
+                bind_wheel(child)
+
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        # 내부 위젯이 모두 배치된 뒤 한 번 바인딩 (자식까지 재귀)
+        self.inner.bind("<Map>", lambda _e: bind_wheel(self.inner), add="+")

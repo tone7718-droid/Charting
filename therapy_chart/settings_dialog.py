@@ -151,9 +151,9 @@ class SettingsDialog(tk.Toplevel):
 
         ttk.Button(self, text="닫기", command=self.destroy).pack(pady=(0, 10))
 
-    def changed(self) -> None:
-        """설정이 바뀔 때마다 호출 — 메인 창이 저장/갱신한다."""
-        self.on_change()
+    def changed(self):
+        """설정이 바뀔 때마다 호출 — 메인 창이 저장/갱신한다. 저장 성공 여부 반환."""
+        return self.on_change()
 
     # ------------------------------------------------------------------
     # 치료사
@@ -325,8 +325,18 @@ class SettingsDialog(tk.Toplevel):
         if d is None:
             messagebox.showinfo("안내", "수정할 진단명을 목록에서 먼저 선택하세요.", parent=self)
             return
-        d["code"] = self.diag_code_var.get().strip().upper()
-        d["name"] = self.diag_name_var.get().strip()
+        code = self.diag_code_var.get().strip().upper()
+        name = self.diag_name_var.get().strip()
+        if not (code or name):
+            messagebox.showinfo("안내", "진단코드나 진단명 중 하나는 입력해야 합니다.", parent=self)
+            return
+        # 다른 항목과 중복되는지 검사 (자기 자신은 제외)
+        for other in self.settings["diagnoses"]:
+            if other is not d and other.get("code") == code and other.get("name") == name:
+                messagebox.showinfo("안내", "이미 등록된 진단명입니다.", parent=self)
+                return
+        d["code"] = code
+        d["name"] = name
         self.refresh_diag_list()
         self.changed()
 
@@ -474,6 +484,12 @@ class SettingsDialog(tk.Toplevel):
             variable=self.remember_geometry_var, command=self._geometry_option_changed,
         ).pack(anchor="w")
 
+        self.auto_reset_var = tk.BooleanVar(value=bool(self.settings.get("auto_reset_after_copy", False)))
+        ttk.Checkbutton(
+            tab, text="복사 성공 시 자동으로 초기화 (다음 환자 입력 준비)",
+            variable=self.auto_reset_var, command=self._auto_reset_option_changed,
+        ).pack(anchor="w", pady=(4, 0))
+
         minutes_row = ttk.Frame(tab)
         minutes_row.pack(fill="x", pady=(10, 0))
         ttk.Label(minutes_row, text="치료시간(분):").pack(side="left")
@@ -489,6 +505,10 @@ class SettingsDialog(tk.Toplevel):
 
     def _geometry_option_changed(self) -> None:
         self.settings["remember_geometry"] = bool(self.remember_geometry_var.get())
+        self.changed()
+
+    def _auto_reset_option_changed(self) -> None:
+        self.settings["auto_reset_after_copy"] = bool(self.auto_reset_var.get())
         self.changed()
 
     def _minutes_changed(self) -> None:
@@ -548,6 +568,13 @@ class SettingsDialog(tk.Toplevel):
             return
         self.settings.clear()
         self.settings.update(restored)
-        self.changed()
+        saved = self.changed()
+        if saved is False:
+            messagebox.showerror(
+                "복원 실패",
+                "복원한 내용을 디스크에 저장하지 못했습니다.\n디스크 여유 공간과 권한을 확인해주세요.",
+                parent=self,
+            )
+            return
         messagebox.showinfo("복원 완료", "백업 파일에서 설정을 복원했습니다.\n설정 창을 다시 열면 복원된 내용이 표시됩니다.", parent=self)
         self.destroy()

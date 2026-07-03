@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from typing import Dict, List, Optional
@@ -30,8 +31,9 @@ OK_COLOR = "#2e8b57"
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(C.APP_NAME)
+        self.title(f"{C.APP_NAME} v{C.APP_VERSION}")
         self.minsize(1000, 640)
+        self._set_window_icon()
 
         self.settings: Dict = storage.load_settings()
         self._restore_geometry()
@@ -51,9 +53,15 @@ class App(tk.Tk):
         self.count_var = tk.StringVar(value="1")
         self.region_var = tk.StringVar()
         self.date_selected: datetime.date = datetime.date.today()
+        # 치료 효과 평가 (선택 입력)
+        self.improvement_var = tk.StringVar()  # 호전/유지/악화 (빈값 = 미선택)
+        self.vas_before_var = tk.StringVar()
+        self.vas_after_var = tk.StringVar()
+        self.eval_note_var = tk.StringVar()
 
         # 미리보기 상태: "auto"(자동 생성) / "editing"(직접 수정 중) / "manual"(수정 내용 유지)
         self.preview_mode = "auto"
+        self._left_changed_in_edit = False  # 직접 수정 중 왼쪽 입력 변경 여부
         self._suppress_uppercase = False  # 대문자 변환 재귀 방지
         self._marked_missing: List[str] = []  # 현재 강조 표시된 누락 항목
 
@@ -65,11 +73,37 @@ class App(tk.Tk):
 
         # 입력 변경 감지 → 미리보기 갱신
         self.diag_code_var.trace_add("write", self._on_code_changed)
-        for var in (self.diag_name_var, self.therapist_var, self.count_var, self.region_var):
+        for var in (self.diag_name_var, self.therapist_var, self.count_var, self.region_var,
+                    self.vas_before_var, self.vas_after_var, self.eval_note_var):
             var.trace_add("write", lambda *_: self.update_preview())
+        self.region_var.trace_add("write", lambda *_: self._refresh_region_fav_button())
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(300, self.first_run_check)
+
+    def report_callback_exception(self, exc, val, tb):
+        """버튼 클릭·trace 등 Tkinter 콜백에서 발생한 예외를 로그로 남기고 안내한다.
+
+        기본 Tk 핸들러는 stderr로만 출력해 error.log에 남지 않으므로 재정의한다.
+        """
+        import traceback
+        from .main import _log_error
+        _log_error("".join(traceback.format_exception(exc, val, tb)))
+        try:
+            self.show_status("⚠ 작업 중 문제가 발생했습니다. 다시 시도해주세요.", MISSING_COLOR)
+        except Exception:
+            pass
+
+    def _set_window_icon(self) -> None:
+        """창 아이콘 적용. EXE(frozen)에서는 번들 경로, 개발 환경에서는 레포 경로."""
+        try:
+            import sys
+            base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            icon_path = os.path.join(base, "assets", "icon.ico")
+            if os.path.isfile(icon_path):
+                self.iconbitmap(icon_path)
+        except Exception:
+            pass  # 아이콘 실패는 치명적이지 않음 (비Windows 환경 포함)
 
     # ==================================================================
     # UI 구성
@@ -197,7 +231,10 @@ class App(tk.Tk):
         lbl_region._normal_text = "시행부위:"  # type: ignore[attr-defined]
         self.region_combo = ttk.Combobox(row2, textvariable=self.region_var, font=BASE_FONT)
         self.region_combo.pack(side="left", fill="x", expand=True)
-        ttk.Label(row2, text="(직접 입력 또는 ▼ 선택)").pack(side="left", padx=(4, 0))
+        self.region_fav_btn = ttk.Button(row2, text="☆ 즐겨찾기", width=10,
+                                         command=self.toggle_region_favorite)
+        self.region_fav_btn.pack(side="left", padx=(4, 0))
+        ttk.Label(row2, text="(직접 입력 또는 ▼)").pack(side="left", padx=(4, 0))
 
         row3 = ttk.Frame(f_misc)
         row3.pack(fill="x", pady=2)
@@ -212,6 +249,41 @@ class App(tk.Tk):
             f_tech, self.settings["techniques"], per_row=2, on_change=self.update_preview
         )
         self.tech_chips.pack(fill="x")
+
+        # ⑦ 치료 효과 평가 (선택 입력) ----------------------------------
+        f_eval = section(left, "⑦ 치료 효과 평가 (선택 입력 — 입력 시에만 출력)")
+        imp_row = ttk.Frame(f_eval)
+        imp_row.pack(fill="x", pady=2)
+        ttk.Label(imp_row, text="주관적 호전도:", width=12).pack(side="left")
+        self.improvement_chips = ChipGroup(
+            imp_row, C.IMPROVEMENT_OPTIONS, per_row=3, on_change=self._on_improvement_toggled
+        )
+        self.improvement_chips.pack(side="left")
+
+        vas_row = ttk.Frame(f_eval)
+        vas_row.pack(fill="x", pady=2)
+        ttk.Label(vas_row, text="VAS:", width=12).pack(side="left")
+        ttk.Label(vas_row, text="치료 전").pack(side="left")
+        ttk.Spinbox(
+            vas_row, from_=0, to=10, textvariable=self.vas_before_var, width=4, justify="center",
+            validate="key", validatecommand=digits_only, font=BASE_FONT,
+        ).pack(side="left", padx=(4, 10))
+        ttk.Label(vas_row, text="→ 치료 후").pack(side="left")
+        ttk.Spinbox(
+            vas_row, from_=0, to=10, textvariable=self.vas_after_var, width=4, justify="center",
+            validate="key", validatecommand=digits_only, font=BASE_FONT,
+        ).pack(side="left", padx=(4, 6))
+        ttk.Label(vas_row, text="(0~10, 둘 다 입력 시 출력)").pack(side="left")
+
+        note_row = ttk.Frame(f_eval)
+        note_row.pack(fill="x", pady=2)
+        ttk.Label(note_row, text="기타 평가:", width=12).pack(side="left")
+        ttk.Entry(note_row, textvariable=self.eval_note_var, font=BASE_FONT).pack(
+            side="left", fill="x", expand=True
+        )
+        ttk.Label(f_eval, text="예: ROM 개선, 치료 전후 통증 유발 동작 감소", foreground="#888888").pack(
+            anchor="w", pady=(2, 0)
+        )
 
         # -------- 오른쪽: 미리보기 + 버튼 --------
         right_inner = ttk.Frame(right, padding=12)
@@ -275,6 +347,7 @@ class App(tk.Tk):
             if r not in regions:
                 regions.append(r)
         self.region_combo.configure(values=regions)
+        self._refresh_region_fav_button()
 
         # 최근 사용 진단명
         self._recent_diags = list(self.settings["recent_diagnoses"])
@@ -302,14 +375,18 @@ class App(tk.Tk):
         if len(therapists) == 1:
             self.therapist_var.set(therapists[0])
 
-    def save_settings(self) -> None:
-        if not storage.save_settings(self.settings):
-            self.show_status("⚠ 설정 저장에 실패했습니다. 디스크 상태를 확인해주세요.", MISSING_COLOR)
+    def save_settings(self) -> bool:
+        """설정을 저장하고 성공 여부를 반환한다. 실패 시 상태 메시지 표시."""
+        ok = storage.save_settings(self.settings)
+        if not ok:
+            self.show_status("⚠ 설정 저장에 실패했습니다. 디스크 상태를 확인해주세요.", MISSING_COLOR, sticky=True)
+        return ok
 
-    def on_settings_changed(self) -> None:
-        """설정 다이얼로그에서 변경이 있을 때마다 호출."""
-        self.save_settings()
+    def on_settings_changed(self) -> bool:
+        """설정 다이얼로그에서 변경이 있을 때마다 호출. 저장 성공 여부 반환."""
+        ok = self.save_settings()
         self.refresh_from_settings()
+        return ok
 
     def open_settings(self) -> None:
         SettingsDialog(self, self.settings, on_change=self.on_settings_changed)
@@ -399,6 +476,47 @@ class App(tk.Tk):
         self.update_preview()
 
     # ==================================================================
+    # 시행부위 즐겨찾기 / 치료 효과 평가
+    # ==================================================================
+    def toggle_region_favorite(self) -> None:
+        """현재 입력된 시행부위를 즐겨찾기에 등록/해제한다."""
+        region = self.region_var.get().strip()
+        if not region:
+            self.show_status("즐겨찾기로 등록할 시행부위를 먼저 입력하세요.", MISSING_COLOR)
+            return
+        favorites = self.settings["region_favorites"]
+        if region in favorites:
+            favorites.remove(region)
+            self.show_status(f"'{region}' 즐겨찾기 해제", OK_COLOR)
+        else:
+            favorites.append(region)
+            self.show_status(f"★ '{region}' 즐겨찾기 등록", OK_COLOR)
+        self.save_settings()
+        self.refresh_from_settings()
+
+    def _refresh_region_fav_button(self) -> None:
+        """시행부위 입력값에 따라 ★/☆ 버튼 표시를 갱신한다."""
+        if not hasattr(self, "region_fav_btn"):
+            return
+        region = self.region_var.get().strip()
+        if region and region in self.settings["region_favorites"]:
+            self.region_fav_btn.config(text="★ 즐겨찾기")
+        else:
+            self.region_fav_btn.config(text="☆ 즐겨찾기")
+
+    def _on_improvement_toggled(self) -> None:
+        """주관적 호전도는 단일 선택 — 마지막 클릭만 유지한다."""
+        selected = self.improvement_chips.get_selected()
+        if len(selected) > 1:
+            keep = selected[-1]
+            for chip in self.improvement_chips.chips:
+                chip.set_selected(chip.label == keep)
+            self.improvement_chips.selection_order = [keep]
+            selected = [keep]
+        self.improvement_var.set(selected[0] if selected else "")
+        self.update_preview()
+
+    # ==================================================================
     # 진료 기록 생성 / 미리보기
     # ==================================================================
     def current_record(self) -> R.TherapyRecord:
@@ -412,16 +530,23 @@ class App(tk.Tk):
             region=self.region_var.get(),
             techniques=self.tech_chips.get_selected(),
             minutes=int(self.settings.get("treatment_minutes", C.DEFAULT_TREATMENT_MINUTES)),
+            improvement=self.improvement_var.get(),
+            vas_before=self.vas_before_var.get(),
+            vas_after=self.vas_after_var.get(),
+            eval_note=self.eval_note_var.get(),
         )
 
     def update_preview(self) -> None:
         """왼쪽 입력이 바뀔 때 호출. 자동 모드에서만 미리보기를 덮어쓴다."""
         self._refresh_missing_marks()
         if self.preview_mode != "auto":
-            # 직접 수정 중에는 덮어쓰지 않고 안내만 표시
-            self.show_status(
-                "왼쪽 항목이 변경되었습니다. [자동 생성 내용으로 갱신]을 누르면 반영됩니다.", "#856404", sticky=True
-            )
+            # 직접 수정 중에는 덮어쓰지 않고, 실제로 변경됐을 때 한 번만 안내
+            if not self._left_changed_in_edit:
+                self._left_changed_in_edit = True
+                self.show_status(
+                    "왼쪽 항목이 변경되었습니다. [자동 생성 내용으로 갱신]을 누르면 반영됩니다.",
+                    "#856404", sticky=True,
+                )
             return
         text = self.current_record().build_text()
         self.output.configure(state="normal")
@@ -434,9 +559,8 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     def toggle_edit_mode(self) -> None:
         if self.preview_mode == "auto" or self.preview_mode == "manual":
-            if self.preview_mode == "auto":
-                pass  # 현재 자동 생성 내용에서 편집 시작
             self.preview_mode = "editing"
+            self._left_changed_in_edit = False
             self.output.configure(state="normal")
             self.output.focus_set()
             self.edit_btn.config(text="✔ 편집 종료")
@@ -451,7 +575,9 @@ class App(tk.Tk):
     def regenerate_preview(self) -> None:
         """직접 수정 내용을 버리고 왼쪽 입력값으로 다시 생성한다."""
         if self.preview_mode != "auto":
-            if not messagebox.askyesno(
+            # 편집된 내용이 자동 생성 결과와 다를 때만 확인 창 표시
+            current = self.output.get("1.0", "end-1c")
+            if current != self.current_record().build_text() and not messagebox.askyesno(
                 "갱신 확인", "직접 수정한 내용이 사라지고 왼쪽 입력값으로 다시 생성됩니다.\n계속할까요?"
             ):
                 return
@@ -505,10 +631,25 @@ class App(tk.Tk):
                 if not text.strip():
                     self.show_status("복사할 내용이 없습니다.", MISSING_COLOR)
                     return
+                # 직접 수정 모드에서도 필수 항목 라벨이 비어 있으면 확인을 받는다
+                missing = R.missing_labels_in_text(text)
+                if missing:
+                    if not messagebox.askyesno(
+                        "필수 항목 확인",
+                        f"다음 필수 항목이 비어 있습니다:\n{', '.join(missing)}\n\n그래도 복사할까요?",
+                    ):
+                        self.show_status(
+                            f"필수 항목을 확인해주세요: {', '.join(missing)}", MISSING_COLOR, sticky=True
+                        )
+                        return
             self.clipboard_clear()
             self.clipboard_append(text)
             self.update()  # 클립보드 내용 유지
-            self.show_status("✔ 진료기록이 클립보드에 복사되었습니다.", OK_COLOR)
+            if self.preview_mode == "auto" and self.settings.get("auto_reset_after_copy"):
+                self.reset_inputs(confirm=False)
+                self.show_status("✔ 복사 완료 — 다음 환자 입력 준비됨", OK_COLOR)
+            else:
+                self.show_status("✔ 진료기록이 클립보드에 복사되었습니다.", OK_COLOR)
         except Exception:
             self.show_status("⚠ 복사 중 문제가 발생했습니다. 다시 시도해주세요.", MISSING_COLOR)
 
@@ -528,9 +669,11 @@ class App(tk.Tk):
         self.save_settings()
         self.refresh_from_settings()
 
-    def reset_inputs(self) -> None:
+    def reset_inputs(self, confirm: bool = True) -> None:
         """현재 환자 입력만 초기화한다. 치료사/설정/저장 목록은 유지."""
-        if not messagebox.askyesno("초기화 확인", "현재 입력한 내용을 초기화할까요?\n(치료사·설정·저장 목록은 유지됩니다)"):
+        if confirm and not messagebox.askyesno(
+            "초기화 확인", "현재 입력한 내용을 초기화할까요?\n(치료사·설정·저장 목록은 유지됩니다)"
+        ):
             return
         self.diag_code_var.set("")
         self.diag_name_var.set("")
@@ -539,6 +682,11 @@ class App(tk.Tk):
         self.region_var.set("")
         self.purpose_chips.clear_selection()
         self.tech_chips.clear_selection()
+        self.improvement_chips.clear_selection()
+        self.improvement_var.set("")
+        self.vas_before_var.set("")
+        self.vas_after_var.set("")
+        self.eval_note_var.set("")
         self.date_selected = datetime.date.today()
         self.calendar.set_date(self.date_selected)
 

@@ -8,6 +8,16 @@ on:
 permissions:
   contents: write  # Release 게시(직접 다운로드 링크)에 필요
 
+# 같은 브랜치에서 동시 실행 시 Release 자산이 서로 덮어쓰지 않도록 직렬화
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+# 이 브랜치에 대한 push만 사용자용 latest 릴리스로 배포한다.
+# (다른 실험 브랜치를 push해도 사용자 다운로드본이 바뀌지 않도록)
+env:
+  DEPLOY_BRANCH: refs/heads/claude/therapy-record-form-exe-9d8xfm
+
 jobs:
   build:
     runs-on: windows-latest
@@ -23,8 +33,12 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
+      # EXE에 포함되는 실제 패키지가 import 단계에서 깨지지 않는지 확인
+      - name: Import smoke test
+        run: python -c "import therapy_chart.main, therapy_chart.main_window, therapy_chart.settings_dialog; print('import OK')"
+
       - name: Install PyInstaller
-        run: pip install pyinstaller
+        run: pip install "pyinstaller==6.21.0"
 
       - name: Build EXE
         run: pyinstaller TherapyChart.spec
@@ -38,8 +52,16 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
+      # 프로그램 버전(constants.APP_VERSION)을 읽어 설치 프로그램 버전과 일치시킨다
+      - name: Read app version
+        id: appver
+        shell: pwsh
+        run: |
+          $v = python -c "from therapy_chart.constants import APP_VERSION; print(APP_VERSION)"
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+
       - name: Build installer
-        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\TherapyChart.iss'
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=${{ steps.appver.outputs.version }} installer\TherapyChart.iss'
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
@@ -47,8 +69,9 @@ jobs:
           name: TherapyChart-installer
           path: installer/Output/TherapyChartSetup.exe
 
-      # 로그인 없이 바로 다운로드할 수 있도록 최신 빌드를 Release로 게시
+      # 배포 브랜치에 대한 push일 때만 로그인 없이 받는 latest 릴리스를 갱신
       - name: Publish latest release
+        if: github.ref == env.DEPLOY_BRANCH
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest

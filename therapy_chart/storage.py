@@ -64,6 +64,8 @@ def default_settings() -> Dict:
         # 창 상태
         "remember_geometry": True,
         "window_geometry": "",
+        # 복사 성공 시 자동으로 초기화 (다음 환자 입력 준비)
+        "auto_reset_after_copy": False,
     }
 
 
@@ -77,12 +79,76 @@ def _legacy_settings_file() -> Optional[str]:
     return path if os.path.isfile(path) else None
 
 
+def _coerce_settings(merged: Dict) -> Dict:
+    """각 설정 값의 타입을 검사해, 잘못된 값만 기본값으로 되돌린다.
+
+    사용자가 설정 파일을 직접 편집했거나 손상·구버전 백업을 복원해도
+    프로그램 전체가 종료되지 않고 해당 항목만 안전하게 복구된다.
+    """
+    defaults = default_settings()
+
+    def as_str_list(value):
+        if not isinstance(value, list):
+            return None
+        return [str(v) for v in value if isinstance(v, (str, int, float))]
+
+    # 문자열 리스트 항목
+    for key in ("therapists", "purposes", "techniques", "region_favorites", "recent_regions"):
+        cleaned = as_str_list(merged.get(key))
+        merged[key] = cleaned if cleaned is not None else list(defaults[key])
+
+    # 문자열 항목
+    for key in ("default_therapist", "last_therapist", "window_geometry"):
+        if not isinstance(merged.get(key), str):
+            merged[key] = defaults[key]
+
+    # 불리언 항목
+    for key in ("remember_geometry", "auto_reset_after_copy"):
+        if not isinstance(merged.get(key), bool):
+            merged[key] = defaults[key]
+
+    # 치료시간: 1~600 정수로 강제
+    minutes = merged.get("treatment_minutes")
+    try:
+        merged["treatment_minutes"] = max(1, min(600, int(minutes)))
+    except (TypeError, ValueError):
+        merged["treatment_minutes"] = defaults["treatment_minutes"]
+
+    # 진단명: {code, name, favorite} 딕셔너리 리스트
+    diagnoses = merged.get("diagnoses")
+    if not isinstance(diagnoses, list):
+        merged["diagnoses"] = list(defaults["diagnoses"])
+    else:
+        cleaned = []
+        for d in diagnoses:
+            if not isinstance(d, dict):
+                continue
+            cleaned.append({
+                "code": str(d.get("code", "")),
+                "name": str(d.get("name", "")),
+                "favorite": bool(d.get("favorite", False)),
+            })
+        merged["diagnoses"] = cleaned
+
+    # 최근 사용 진단명: {code, name} 딕셔너리 리스트
+    recent = merged.get("recent_diagnoses")
+    if not isinstance(recent, list):
+        merged["recent_diagnoses"] = []
+    else:
+        merged["recent_diagnoses"] = [
+            {"code": str(d.get("code", "")), "name": str(d.get("name", ""))}
+            for d in recent if isinstance(d, dict)
+        ]
+
+    return merged
+
+
 def merge_with_defaults(loaded: Dict) -> Dict:
-    """저장된 설정에 없는 키를 기본값으로 채운다 (버전 업그레이드 대비)."""
+    """저장된 설정에 없는 키를 기본값으로 채우고, 값 타입을 검증한다."""
     merged = default_settings()
     for key, value in loaded.items():
         merged[key] = value
-    return merged
+    return _coerce_settings(merged)
 
 
 def load_settings() -> Dict:
@@ -139,29 +205,44 @@ def push_recent(items: List, value, limit: int = C.RECENT_LIMIT) -> List:
 _CSV_HEADER_WORDS = {"code", "진단코드", "코드", "diagnosis_code"}
 
 
+def _read_csv_text(path: str) -> str:
+    """CSV 파일을 읽는다. 한글 Windows 엑셀 기본 저장(CP949)까지 지원한다.
+
+    utf-8-sig(BOM 포함 UTF-8) → cp949 순으로 시도한다.
+    """
+    for encoding in ("utf-8-sig", "cp949"):
+        try:
+            with open(path, "r", encoding=encoding, newline="") as f:
+                return f.read()
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("파일 인코딩을 인식할 수 없습니다. UTF-8 또는 CP949(엑셀) 형식으로 저장해주세요.")
+
+
 def import_diagnoses_csv(path: str) -> Tuple[List[Dict], int]:
     """CSV 파일에서 진단명 목록을 읽는다.
 
     반환: (읽은 진단 목록, 건너뛴 줄 수)
     파일 오류 시 OSError/ValueError를 발생시킨다 (호출 측에서 안내 처리).
     """
+    import io
+
     items: List[Dict] = []
     skipped = 0
-    # utf-8-sig: 엑셀에서 저장한 CSV의 BOM 처리
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            cells = [c.strip() for c in row]
-            if not any(cells):
-                continue
-            if cells[0].lower() in _CSV_HEADER_WORDS:
-                continue  # 헤더 행
-            code = cells[0].upper() if cells else ""
-            name = cells[1] if len(cells) > 1 else ""
-            if not (code or name):
-                skipped += 1
-                continue
-            items.append({"code": code, "name": name, "favorite": False})
+    text = _read_csv_text(path)  # OSError는 그대로 전파 (파일 없음 등)
+    reader = csv.reader(io.StringIO(text))
+    for row in reader:
+        cells = [c.strip() for c in row]
+        if not any(cells):
+            continue
+        if cells[0].lower() in _CSV_HEADER_WORDS:
+            continue  # 헤더 행
+        code = cells[0].upper() if cells else ""
+        name = cells[1] if len(cells) > 1 else ""
+        if not (code or name):
+            skipped += 1
+            continue
+        items.append({"code": code, "name": name, "favorite": False})
     if not items:
         raise ValueError("가져올 수 있는 진단명이 없습니다.")
     return items, skipped

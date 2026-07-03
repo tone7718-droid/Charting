@@ -114,6 +114,71 @@ class TestBuildText(unittest.TestCase):
         self.assertIn("진단명 : M751", text)
 
 
+class TestEvaluation(unittest.TestCase):
+    def test_no_eval_line_when_empty(self):
+        text = sample_record().build_text()
+        self.assertNotIn("치료 효과 평가", text)
+        self.assertEqual(len(sample_record().build_lines()), 8)
+
+    def test_eval_line_inserted_between_technique_and_minutes(self):
+        rec = sample_record(improvement="호전", vas_before="6", vas_after="3", eval_note="ROM 개선")
+        lines = rec.build_lines()
+        labels = [line.split(" : ")[0] for line in lines]
+        self.assertEqual(len(lines), 9)
+        self.assertEqual(labels.index("치료 효과 평가"), labels.index("시행기법") + 1)
+        self.assertEqual(labels.index("치료시간"), labels.index("치료 효과 평가") + 1)
+
+    def test_eval_display_combines_only_filled_parts(self):
+        self.assertEqual(
+            sample_record(improvement="호전", vas_before="6", vas_after="3", eval_note="ROM 개선").eval_display(),
+            "주관적 호전도 호전, VAS 6→3, ROM 개선",
+        )
+
+    def test_vas_needs_both_before_and_after(self):
+        self.assertEqual(sample_record(vas_before="6").eval_display(), "")
+        self.assertEqual(sample_record(vas_after="3").eval_display(), "")
+        self.assertEqual(sample_record(vas_before="6", vas_after="3").eval_display(), "VAS 6→3")
+
+    def test_improvement_only(self):
+        self.assertEqual(sample_record(improvement="악화").eval_display(), "주관적 호전도 악화")
+
+    def test_eval_not_required(self):
+        # 치료 효과 평가가 비어 있어도 필수 항목 누락이 아니다
+        self.assertEqual(sample_record().missing_fields(), [])
+
+
+class TestMissingLabelsInText(unittest.TestCase):
+    def test_full_text_has_no_missing(self):
+        text = sample_record().build_text()
+        self.assertEqual(R.missing_labels_in_text(text), [])
+
+    def test_detects_emptied_labels(self):
+        text = (
+            "진단명 : \n"
+            "치료목적 : 통증 감소\n"
+            "시행자 : 홍길동 물리치료사\n"
+            "시행일시 : 2026년 07월 03일\n"
+            "시행횟수 : 3회차\n"
+            "시행부위 : \n"
+            "시행기법 : Myofascial Release\n"
+            "치료시간 : 30분"
+        )
+        self.assertEqual(R.missing_labels_in_text(text), ["진단명", "시행부위"])
+
+    def test_missing_line_entirely(self):
+        # 시행기법 줄을 통째로 지운 경우
+        text = (
+            "진단명 : M751 회전근개증후군\n"
+            "치료목적 : 통증 감소\n"
+            "시행자 : 홍길동 물리치료사\n"
+            "시행일시 : 2026년 07월 03일\n"
+            "시행횟수 : 3회차\n"
+            "시행부위 : 허리\n"
+            "치료시간 : 30분"
+        )
+        self.assertIn("시행기법", R.missing_labels_in_text(text))
+
+
 class TestMissingFields(unittest.TestCase):
     def test_complete_record_has_no_missing(self):
         self.assertEqual(sample_record().missing_fields(), [])
