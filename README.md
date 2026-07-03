@@ -22,7 +22,11 @@
 
 코드가 push될 때마다 GitHub이 자동으로 Windows용 실행 파일을 빌드합니다.
 
-1. GitHub 저장소의 **Actions** 탭 → 가장 최근의 **Build Windows EXE** 실행 클릭
+1. **Releases 페이지에서 바로 다운로드 (권장, 로그인 불필요)**:
+   https://github.com/tone7718-droid/Charting/releases/tag/latest
+   - `TherapyChartSetup.exe` — 설치 프로그램 (바탕화면 바로가기 생성)
+   - `TherapyChart.exe` — 설치 없이 바로 실행
+2. 또는 GitHub 저장소의 **Actions** 탭 → 가장 최근의 **Build Windows EXE** 실행 클릭
 2. 하단 **Artifacts**에서 다운로드:
    - `TherapyChart-installer` — **설치 프로그램** (권장): 실행하면 설치 경로 선택,
      바탕화면 바로가기 생성, 시작 메뉴 등록, 제거 기능까지 제공

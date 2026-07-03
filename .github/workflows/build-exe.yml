@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   workflow_dispatch:
 
+permissions:
+  contents: write  # Release 게시(직접 다운로드 링크)에 필요
+
 jobs:
   build:
     runs-on: windows-latest
@@ -43,3 +46,19 @@ jobs:
         with:
           name: TherapyChart-installer
           path: installer/Output/TherapyChartSetup.exe
+
+      # 로그인 없이 바로 다운로드할 수 있도록 최신 빌드를 Release로 게시
+      - name: Publish latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "최신 빌드 (자동 게시)"
+          body: |
+            푸시할 때마다 자동으로 갱신되는 최신 빌드입니다.
+
+            - **TherapyChartSetup.exe** — 설치 프로그램 (권장: 바탕화면 바로가기 생성)
+            - **TherapyChart.exe** — 설치 없이 바로 실행하는 단일 파일
+          make_latest: true
+          files: |
+            dist/TherapyChart.exe
+            installer/Output/TherapyChartSetup.exe
