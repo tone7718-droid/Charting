@@ -2,5 +2,7 @@ __pycache__/
 *.pyc
 build/
 dist/
+# TherapyChart.spec은 빌드 설정이므로 커밋 대상 (자동 생성 spec만 무시)
 *.spec
+!TherapyChart.spec
 therapy_chart_settings.json
