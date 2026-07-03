@@ -17,14 +17,29 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
       - name: Install PyInstaller
         run: pip install pyinstaller
 
       - name: Build EXE
-        run: pyinstaller --onefile --windowed --name TherapyChart therapy_chart.py
+        run: pyinstaller TherapyChart.spec
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
           name: TherapyChart-exe
           path: dist/TherapyChart.exe
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\TherapyChart.iss'
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TherapyChart-installer
+          path: installer/Output/TherapyChartSetup.exe
