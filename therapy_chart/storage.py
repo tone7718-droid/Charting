@@ -205,47 +205,39 @@ def push_recent(items: List, value, limit: int = C.RECENT_LIMIT) -> List:
 _CSV_HEADER_WORDS = {"code", "진단코드", "코드", "diagnosis_code"}
 
 
-def _read_csv_text(path: str) -> str:
-    """CSV 파일을 읽는다. 한글 Windows 엑셀 기본 저장(CP949)까지 지원한다.
-
-    utf-8-sig(BOM 포함 UTF-8) → cp949 순으로 시도한다.
-    """
-    for encoding in ("utf-8-sig", "cp949"):
-        try:
-            with open(path, "r", encoding=encoding, newline="") as f:
-                return f.read()
-        except UnicodeDecodeError:
-            continue
-    raise ValueError("파일 인코딩을 인식할 수 없습니다. UTF-8 또는 CP949(엑셀) 형식으로 저장해주세요.")
-
-
 def import_diagnoses_csv(path: str) -> Tuple[List[Dict], int]:
-    """CSV 파일에서 진단명 목록을 읽는다.
+    """CSV 파일에서 진단명 목록을 읽는다. 한글 Windows 엑셀 기본 저장(CP949)까지 지원한다.
 
     반환: (읽은 진단 목록, 건너뛴 줄 수)
     파일 오류 시 OSError/ValueError를 발생시킨다 (호출 측에서 안내 처리).
     """
-    import io
+    for encoding in ("utf-8-sig", "cp949"):
+        items: List[Dict] = []
+        skipped = 0
+        try:
+            with open(path, "r", encoding=encoding, newline="") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    cells = [c.strip() for c in row]
+                    if not any(cells):
+                        continue
+                    if cells[0].lower() in _CSV_HEADER_WORDS:
+                        continue  # 헤더 행
+                    code = cells[0].upper() if cells else ""
+                    name = cells[1] if len(cells) > 1 else ""
+                    if not (code or name):
+                        skipped += 1
+                        continue
+                    items.append({"code": code, "name": name, "favorite": False})
 
-    items: List[Dict] = []
-    skipped = 0
-    text = _read_csv_text(path)  # OSError는 그대로 전파 (파일 없음 등)
-    reader = csv.reader(io.StringIO(text))
-    for row in reader:
-        cells = [c.strip() for c in row]
-        if not any(cells):
+            if not items:
+                raise ValueError("가져올 수 있는 진단명이 없습니다.")
+            return items, skipped
+
+        except UnicodeDecodeError:
             continue
-        if cells[0].lower() in _CSV_HEADER_WORDS:
-            continue  # 헤더 행
-        code = cells[0].upper() if cells else ""
-        name = cells[1] if len(cells) > 1 else ""
-        if not (code or name):
-            skipped += 1
-            continue
-        items.append({"code": code, "name": name, "favorite": False})
-    if not items:
-        raise ValueError("가져올 수 있는 진단명이 없습니다.")
-    return items, skipped
+
+    raise ValueError("파일 인코딩을 인식할 수 없습니다. UTF-8 또는 CP949(엑셀) 형식으로 저장해주세요.")
 
 
 def export_diagnoses_csv(path: str, diagnoses: List[Dict]) -> None:
