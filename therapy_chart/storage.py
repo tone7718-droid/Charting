@@ -184,10 +184,18 @@ def load_settings() -> Dict:
 
 
 def save_settings(settings: Dict) -> bool:
-    """설정을 저장한다. 임시 파일에 쓴 뒤 교체하여 파일 손상을 방지한다."""
+    """설정을 저장한다. 임시 파일에 쓴 뒤 교체하여 파일 손상을 방지한다.
+
+    저장 직전에 타입과 범위를 한 번 더 검증하고, 호출자가 들고 있는
+    settings 딕셔너리도 정리된 값으로 갱신한다. 예를 들어 설정 창에서
+    치료시간에 9999를 직접 입력해도 600분으로 보정되어 저장·화면 갱신된다.
+    """
     path = settings_file()
     tmp = path + ".tmp"
     try:
+        cleaned = merge_with_defaults(settings)
+        settings.clear()
+        settings.update(cleaned)
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=2)
         os.replace(tmp, path)
