@@ -4,8 +4,8 @@
 import datetime
 import unittest
 
-from therapy_chart import record as R
 from therapy_chart import constants as C
+from therapy_chart import record as R
 
 
 def sample_record(**overrides) -> R.TherapyRecord:
@@ -144,9 +144,9 @@ class TestEvaluation(unittest.TestCase):
         self.assertEqual(sample_record(vas_before="6", vas_after="3").eval_display(), "VAS 6→3")
 
     def test_vas_must_be_0_to_10_integer(self):
-        self.assertTrue(R.is_valid_vas("0"))
-        self.assertTrue(R.is_valid_vas("10"))
-        self.assertFalse(R.is_valid_vas("11"))
+        self.assertTrue(R.is_valid_vas(str(C.MIN_VAS)))
+        self.assertTrue(R.is_valid_vas(str(C.MAX_VAS)))
+        self.assertFalse(R.is_valid_vas(str(C.MAX_VAS + 1)))
         self.assertFalse(R.is_valid_vas("-1"))
         self.assertFalse(R.is_valid_vas("3.5"))
         self.assertEqual(sample_record(vas_before="99", vas_after="3").eval_display(), "")
@@ -210,6 +210,23 @@ class TestMissingLabelsInText(unittest.TestCase):
         self.assertIn("시행기법", R.missing_labels_in_text(text))
 
 
+class TestInvalidValuesInText(unittest.TestCase):
+    def test_detects_manual_invalid_count(self):
+        text = sample_record(count=str(C.MAX_TREATMENT_COUNT + 1)).build_text()
+        self.assertIn("시행횟수(1~999회차)", R.invalid_values_in_text(text))
+
+    def test_detects_manual_invalid_minutes(self):
+        text = sample_record(minutes=C.MAX_TREATMENT_MINUTES + 1).build_text()
+        self.assertIn("치료시간(1~600분)", R.invalid_values_in_text(text))
+
+    def test_detects_manual_invalid_vas(self):
+        text = sample_record(eval_note="").build_text() + "\n치료 효과 평가 : VAS 99→3"
+        self.assertIn("VAS(0~10)", R.invalid_values_in_text(text))
+
+    def test_valid_manual_values_have_no_invalids(self):
+        self.assertEqual(R.invalid_values_in_text(sample_record(vas_before="6", vas_after="3").build_text()), [])
+
+
 class TestMissingFields(unittest.TestCase):
     def test_complete_record_has_no_missing(self):
         self.assertEqual(sample_record().missing_fields(), [])
@@ -224,11 +241,13 @@ class TestMissingFields(unittest.TestCase):
         rec = sample_record(diagnosis_code="", diagnosis_name="")
         self.assertIn("진단명", rec.missing_fields())
 
-    def test_count_must_be_positive_number(self):
+    def test_count_must_be_positive_number_in_configured_range(self):
         self.assertIn("시행횟수", sample_record(count="").missing_fields())
         self.assertIn("시행횟수", sample_record(count="0").missing_fields())
         self.assertIn("시행횟수", sample_record(count="abc").missing_fields())
-        self.assertEqual(sample_record(count="1").missing_fields(), [])
+        self.assertIn("시행횟수", sample_record(count=str(C.MAX_TREATMENT_COUNT + 1)).missing_fields())
+        self.assertEqual(sample_record(count=str(C.MIN_TREATMENT_COUNT)).missing_fields(), [])
+        self.assertEqual(sample_record(count=str(C.MAX_TREATMENT_COUNT)).missing_fields(), [])
 
     def test_minutes_must_be_in_configured_range(self):
         self.assertEqual(sample_record(minutes=C.MIN_TREATMENT_MINUTES).missing_fields(), [])
