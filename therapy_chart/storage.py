@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """사용자 설정 및 등록 데이터의 로컬 저장.
 
-- 저장 위치: Windows 표준 사용자 데이터 경로 %APPDATA%\\TherapyChart\\settings.json
+- 저장 위치: Windows 표준 사용자 데이터 경로 %APPDATA%\TherapyChart\settings.json
   (다른 OS에서는 홈 폴더 하위 .config/TherapyChart)
 - 저장 형식: JSON (UTF-8)
   데이터 규모가 작고(수백 건 이하의 문자열 목록) 백업/복원이 파일 하나로
@@ -39,6 +39,11 @@ def settings_file() -> str:
     return os.path.join(data_dir(), SETTINGS_FILENAME)
 
 
+def _normalize_code_value(code: object) -> str:
+    """저장/CSV용 진단코드 정규화. 점(.) 없는 대문자 표기로 맞춘다."""
+    return str(code or "").strip().upper().replace(".", "")
+
+
 def default_settings() -> Dict:
     """최초 실행 시의 기본 설정값."""
     return {
@@ -50,7 +55,7 @@ def default_settings() -> Dict:
         # 치료 목적 / 시행 기법 (사용자 정의 항목 포함 전체 목록)
         "purposes": list(C.DEFAULT_PURPOSES),
         "techniques": list(C.DEFAULT_TECHNIQUES),
-        # 치료 시간(분) — 값을 설정으로 분리 (1차 버전 기본 30분)
+        # 치료 시간(분)
         "treatment_minutes": C.DEFAULT_TREATMENT_MINUTES,
         # 진단명
         "diagnoses": [
@@ -107,10 +112,13 @@ def _coerce_settings(merged: Dict) -> Dict:
         if not isinstance(merged.get(key), bool):
             merged[key] = defaults[key]
 
-    # 치료시간: 1~600 정수로 강제
+    # 치료시간: 설정 범위 정수로 강제
     minutes = merged.get("treatment_minutes")
     try:
-        merged["treatment_minutes"] = max(1, min(600, int(minutes)))
+        merged["treatment_minutes"] = max(
+            C.MIN_TREATMENT_MINUTES,
+            min(C.MAX_TREATMENT_MINUTES, int(minutes)),
+        )
     except (TypeError, ValueError):
         merged["treatment_minutes"] = defaults["treatment_minutes"]
 
@@ -124,7 +132,7 @@ def _coerce_settings(merged: Dict) -> Dict:
             if not isinstance(d, dict):
                 continue
             cleaned.append({
-                "code": str(d.get("code", "")),
+                "code": _normalize_code_value(d.get("code", "")),
                 "name": str(d.get("name", "")),
                 "favorite": bool(d.get("favorite", False)),
             })
@@ -136,7 +144,7 @@ def _coerce_settings(merged: Dict) -> Dict:
         merged["recent_diagnoses"] = []
     else:
         merged["recent_diagnoses"] = [
-            {"code": str(d.get("code", "")), "name": str(d.get("name", ""))}
+            {"code": _normalize_code_value(d.get("code", "")), "name": str(d.get("name", ""))}
             for d in recent if isinstance(d, dict)
         ]
 
@@ -205,47 +213,41 @@ def push_recent(items: List, value, limit: int = C.RECENT_LIMIT) -> List:
 _CSV_HEADER_WORDS = {"code", "진단코드", "코드", "diagnosis_code"}
 
 
-def _read_csv_text(path: str) -> str:
-    """CSV 파일을 읽는다. 한글 Windows 엑셀 기본 저장(CP949)까지 지원한다.
-
-    utf-8-sig(BOM 포함 UTF-8) → cp949 순으로 시도한다.
-    """
-    for encoding in ("utf-8-sig", "cp949"):
-        try:
-            with open(path, "r", encoding=encoding, newline="") as f:
-                return f.read()
-        except UnicodeDecodeError:
-            continue
-    raise ValueError("파일 인코딩을 인식할 수 없습니다. UTF-8 또는 CP949(엑셀) 형식으로 저장해주세요.")
-
-
 def import_diagnoses_csv(path: str) -> Tuple[List[Dict], int]:
     """CSV 파일에서 진단명 목록을 읽는다.
+
+    utf-8-sig(BOM 포함 UTF-8) → cp949 순으로 시도한다.
+    파일 전체를 메모리에 올리지 않고 스트리밍으로 읽는다.
 
     반환: (읽은 진단 목록, 건너뛴 줄 수)
     파일 오류 시 OSError/ValueError를 발생시킨다 (호출 측에서 안내 처리).
     """
-    import io
+    for encoding in ("utf-8-sig", "cp949"):
+        items: List[Dict] = []
+        skipped = 0
+        try:
+            with open(path, "r", encoding=encoding, newline="") as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    cells = [c.strip() for c in row]
+                    if not any(cells):
+                        continue
+                    if cells[0].lower() in _CSV_HEADER_WORDS:
+                        continue  # 헤더 행
+                    code = _normalize_code_value(cells[0] if cells else "")
+                    name = cells[1] if len(cells) > 1 else ""
+                    if not (code or name):
+                        skipped += 1
+                        continue
+                    items.append({"code": code, "name": name, "favorite": False})
+        except UnicodeDecodeError:
+            continue
 
-    items: List[Dict] = []
-    skipped = 0
-    text = _read_csv_text(path)  # OSError는 그대로 전파 (파일 없음 등)
-    reader = csv.reader(io.StringIO(text))
-    for row in reader:
-        cells = [c.strip() for c in row]
-        if not any(cells):
-            continue
-        if cells[0].lower() in _CSV_HEADER_WORDS:
-            continue  # 헤더 행
-        code = cells[0].upper() if cells else ""
-        name = cells[1] if len(cells) > 1 else ""
-        if not (code or name):
-            skipped += 1
-            continue
-        items.append({"code": code, "name": name, "favorite": False})
-    if not items:
-        raise ValueError("가져올 수 있는 진단명이 없습니다.")
-    return items, skipped
+        if not items:
+            raise ValueError("가져올 수 있는 진단명이 없습니다.")
+        return items, skipped
+
+    raise ValueError("파일 인코딩을 인식할 수 없습니다. UTF-8 또는 CP949(엑셀) 형식으로 저장해주세요.")
 
 
 def export_diagnoses_csv(path: str, diagnoses: List[Dict]) -> None:
@@ -254,7 +256,7 @@ def export_diagnoses_csv(path: str, diagnoses: List[Dict]) -> None:
         writer = csv.writer(f)
         writer.writerow(["진단코드", "진단명"])
         for d in diagnoses:
-            writer.writerow([d.get("code", ""), d.get("name", "")])
+            writer.writerow([_normalize_code_value(d.get("code", "")), d.get("name", "")])
 
 
 # ---------------------------------------------------------------------------
