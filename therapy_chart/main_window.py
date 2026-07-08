@@ -16,13 +16,14 @@ from typing import Dict, List, Optional
 from . import constants as C
 from . import record as R
 from . import storage
+from . import ui_validation as V
+from .panels.preview_panel import PreviewPanel
 from .settings_dialog import SettingsDialog
 from .widgets import ACCENT, CalendarWidget, ChipGroup, ScrollableFrame
 
 BASE_FONT = ("맑은 고딕", 11)
 BOLD_FONT = ("맑은 고딕", 11, "bold")
 TITLE_FONT = ("맑은 고딕", 12, "bold")
-PREVIEW_FONT = ("맑은 고딕", 13)
 
 MISSING_COLOR = "#d9534f"   # 필수 항목 누락 강조색
 OK_COLOR = "#2e8b57"
@@ -62,8 +63,9 @@ class App(tk.Tk):
         # 미리보기 상태: "auto"(자동 생성) / "editing"(직접 수정 중) / "manual"(수정 내용 유지)
         self.preview_mode = "auto"
         self._left_changed_in_edit = False  # 직접 수정 중 왼쪽 입력 변경 여부
-        self._suppress_uppercase = False  # 대문자 변환 재귀 방지
+        self._suppress_code_normalize = False
         self._marked_missing: List[str] = []  # 현재 강조 표시된 누락 항목
+        self._recent_diags: List[Dict] = []
 
         self.build_ui()
         self._bind_shortcuts()
@@ -73,8 +75,15 @@ class App(tk.Tk):
 
         # 입력 변경 감지 → 미리보기 갱신
         self.diag_code_var.trace_add("write", self._on_code_changed)
-        for var in (self.diag_name_var, self.therapist_var, self.count_var, self.region_var,
-                    self.vas_before_var, self.vas_after_var, self.eval_note_var):
+        for var in (
+            self.diag_name_var,
+            self.therapist_var,
+            self.count_var,
+            self.region_var,
+            self.vas_before_var,
+            self.vas_after_var,
+            self.eval_note_var,
+        ):
             var.trace_add("write", lambda *_: self.update_preview())
         self.region_var.trace_add("write", lambda *_: self._refresh_region_fav_button())
 
@@ -82,12 +91,10 @@ class App(tk.Tk):
         self.after(300, self.first_run_check)
 
     def report_callback_exception(self, exc, val, tb):
-        """버튼 클릭·trace 등 Tkinter 콜백에서 발생한 예외를 로그로 남기고 안내한다.
-
-        기본 Tk 핸들러는 stderr로만 출력해 error.log에 남지 않으므로 재정의한다.
-        """
+        """버튼 클릭·trace 등 Tkinter 콜백에서 발생한 예외를 로그로 남기고 안내한다."""
         import traceback
         from .main import _log_error
+
         _log_error("".join(traceback.format_exception(exc, val, tb)))
         try:
             self.show_status("⚠ 작업 중 문제가 발생했습니다. 다시 시도해주세요.", MISSING_COLOR)
@@ -98,6 +105,7 @@ class App(tk.Tk):
         """창 아이콘 적용. EXE(frozen)에서는 번들 경로, 개발 환경에서는 레포 경로."""
         try:
             import sys
+
             base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             icon_path = os.path.join(base, "assets", "icon.ico")
             if os.path.isfile(icon_path):
@@ -108,13 +116,15 @@ class App(tk.Tk):
     # ==================================================================
     # UI 구성
     # ==================================================================
+    def _range_validate(self, minimum: int, maximum: int):
+        return (self.register(lambda s: V.is_empty_or_int_in_range(s, minimum, maximum)), "%P")
+
     def build_ui(self) -> None:
         # 치료사 미등록 안내 배너
         self.banner = tk.Label(
             self, text="⚠ 설정에서 치료사를 먼저 등록해주세요.",
             font=BOLD_FONT, bg="#fff3cd", fg="#856404", pady=6,
         )
-        # (표시는 refresh_from_settings에서 결정)
 
         paned = ttk.PanedWindow(self, orient="horizontal")
         paned.pack(fill="both", expand=True)
@@ -125,9 +135,10 @@ class App(tk.Tk):
         paned.add(right, weight=1)
         left = left_scroll.inner
 
-        digits_only = (self.register(lambda s: s.isdigit() or s == ""), "%P")
+        count_validate = self._range_validate(C.MIN_TREATMENT_COUNT, C.MAX_TREATMENT_COUNT)
+        vas_validate = self._range_validate(C.MIN_VAS, C.MAX_VAS)
 
-        # 필수 항목 강조를 위한 섹션 제목 라벨 저장소: 라벨명 → (위젯, 원래 텍스트)
+        # 필수 항목 강조를 위한 섹션 제목 라벨 저장소: 라벨명 → 위젯
         self._field_titles: Dict[str, tk.Widget] = {}
 
         def section(parent, title: str, field_label: Optional[str] = None) -> ttk.Frame:
@@ -218,10 +229,20 @@ class App(tk.Tk):
         self._field_titles[C.LABEL_COUNT] = lbl_count
         lbl_count._normal_text = "시행횟수:"  # type: ignore[attr-defined]
         ttk.Spinbox(
-            row1, from_=1, to=999, textvariable=self.count_var, width=6, justify="center",
-            validate="key", validatecommand=digits_only, font=BASE_FONT,
+            row1,
+            from_=C.MIN_TREATMENT_COUNT,
+            to=C.MAX_TREATMENT_COUNT,
+            textvariable=self.count_var,
+            width=6,
+            justify="center",
+            validate="key",
+            validatecommand=count_validate,
+            font=BASE_FONT,
         ).pack(side="left")
-        ttk.Label(row1, text="회차 ('회차'는 자동으로 붙습니다)").pack(side="left", padx=(4, 0))
+        ttk.Label(
+            row1,
+            text=f"회차 ({C.MIN_TREATMENT_COUNT}~{C.MAX_TREATMENT_COUNT}, '회차'는 자동)",
+        ).pack(side="left", padx=(4, 0))
 
         row2 = ttk.Frame(f_misc)
         row2.pack(fill="x", pady=2)
@@ -231,8 +252,7 @@ class App(tk.Tk):
         lbl_region._normal_text = "시행부위:"  # type: ignore[attr-defined]
         self.region_combo = ttk.Combobox(row2, textvariable=self.region_var, font=BASE_FONT)
         self.region_combo.pack(side="left", fill="x", expand=True)
-        self.region_fav_btn = ttk.Button(row2, text="☆ 즐겨찾기", width=10,
-                                         command=self.toggle_region_favorite)
+        self.region_fav_btn = ttk.Button(row2, text="☆ 즐겨찾기", width=10, command=self.toggle_region_favorite)
         self.region_fav_btn.pack(side="left", padx=(4, 0))
         ttk.Label(row2, text="(직접 입력 또는 ▼)").pack(side="left", padx=(4, 0))
 
@@ -241,7 +261,10 @@ class App(tk.Tk):
         ttk.Label(row3, text="치료시간:", width=10).pack(side="left")
         self.minutes_lbl = ttk.Label(row3, font=BOLD_FONT)
         self.minutes_lbl.pack(side="left")
-        ttk.Label(row3, text="(변경은 [설정] > 데이터 탭)").pack(side="left", padx=(6, 0))
+        ttk.Label(
+            row3,
+            text=f"(설정 > 데이터 탭, {C.MIN_TREATMENT_MINUTES}~{C.MAX_TREATMENT_MINUTES}분)",
+        ).pack(side="left", padx=(6, 0))
 
         # ⑥ 시행기법 ----------------------------------------------------
         f_tech = section(left, "⑥ 시행기법 (클릭하여 다중 선택)", C.LABEL_TECHNIQUE)
@@ -265,15 +288,29 @@ class App(tk.Tk):
         ttk.Label(vas_row, text="VAS:", width=12).pack(side="left")
         ttk.Label(vas_row, text="치료 전").pack(side="left")
         ttk.Spinbox(
-            vas_row, from_=0, to=10, textvariable=self.vas_before_var, width=4, justify="center",
-            validate="key", validatecommand=digits_only, font=BASE_FONT,
+            vas_row,
+            from_=C.MIN_VAS,
+            to=C.MAX_VAS,
+            textvariable=self.vas_before_var,
+            width=4,
+            justify="center",
+            validate="key",
+            validatecommand=vas_validate,
+            font=BASE_FONT,
         ).pack(side="left", padx=(4, 10))
         ttk.Label(vas_row, text="→ 치료 후").pack(side="left")
         ttk.Spinbox(
-            vas_row, from_=0, to=10, textvariable=self.vas_after_var, width=4, justify="center",
-            validate="key", validatecommand=digits_only, font=BASE_FONT,
+            vas_row,
+            from_=C.MIN_VAS,
+            to=C.MAX_VAS,
+            textvariable=self.vas_after_var,
+            width=4,
+            justify="center",
+            validate="key",
+            validatecommand=vas_validate,
+            font=BASE_FONT,
         ).pack(side="left", padx=(4, 6))
-        ttk.Label(vas_row, text="(0~10, 둘 다 입력 시 출력)").pack(side="left")
+        ttk.Label(vas_row, text=f"({C.MIN_VAS}~{C.MAX_VAS}, 둘 다 입력 시 출력)").pack(side="left")
 
         note_row = ttk.Frame(f_eval)
         note_row.pack(fill="x", pady=2)
@@ -285,37 +322,9 @@ class App(tk.Tk):
             anchor="w", pady=(2, 0)
         )
 
-        # -------- 오른쪽: 미리보기 + 버튼 --------
-        right_inner = ttk.Frame(right, padding=12)
-        right_inner.pack(fill="both", expand=True)
-
-        head_row = ttk.Frame(right_inner)
-        head_row.pack(fill="x")
-        ttk.Label(head_row, text="진료 기록 미리보기", font=TITLE_FONT, foreground=ACCENT).pack(side="left")
-        self.edit_btn = ttk.Button(head_row, text="✏ 직접 수정", command=self.toggle_edit_mode)
-        self.edit_btn.pack(side="right")
-        self.regen_btn = ttk.Button(head_row, text="🔄 자동 생성 내용으로 갱신", command=self.regenerate_preview)
-        # (regen_btn은 직접 수정 상태에서만 표시)
-
-        # 창이 낮아도 버튼/상태 표시가 잘리지 않도록 아래쪽부터 먼저 배치
-        bottom = ttk.Frame(right_inner)
-        bottom.pack(side="bottom", fill="x", pady=(6, 0))
-        self.status_lbl = ttk.Label(right_inner, text="", font=BOLD_FONT)
-        self.status_lbl.pack(side="bottom", fill="x")
-
-        self.output = tk.Text(
-            right_inner, font=PREVIEW_FONT, wrap="word", relief="solid",
-            borderwidth=1, padx=14, pady=14, spacing3=10,
-        )
-        self.output.pack(fill="both", expand=True, pady=(8, 6))
-        self.output.configure(state="disabled")
-        ttk.Button(bottom, text="초기화 (Ctrl+R)", command=self.reset_inputs).pack(side="left")
-        ttk.Button(bottom, text="⚙ 설정", command=self.open_settings).pack(side="left", padx=(6, 0))
-        tk.Button(
-            bottom, text="📋 전체 복사 (Ctrl+Shift+C)", font=("맑은 고딕", 13, "bold"),
-            bg=ACCENT, fg="white", activebackground="#1d4fc4", activeforeground="white",
-            relief="flat", padx=20, pady=8, cursor="hand2", command=self.copy_output,
-        ).pack(side="right")
+        # -------- 오른쪽: 미리보기 패널 --------
+        self.preview_panel = PreviewPanel(right, self)
+        self.preview_panel.pack(fill="both", expand=True)
 
     def _bind_shortcuts(self) -> None:
         self.bind_all("<Control-Shift-C>", lambda _e: self.copy_output())
@@ -400,15 +409,15 @@ class App(tk.Tk):
     # 진단명
     # ==================================================================
     def _on_code_changed(self, *_args) -> None:
-        """진단코드 소문자 → 대문자 자동 변환."""
-        if self._suppress_uppercase:
+        """진단코드를 대문자·점 제거 형식으로 즉시 정규화한다."""
+        if self._suppress_code_normalize:
             return
         value = self.diag_code_var.get()
-        upper = value.upper()
-        if value != upper:
-            self._suppress_uppercase = True
-            self.diag_code_var.set(upper)
-            self._suppress_uppercase = False
+        normalized = R.normalize_code(value)
+        if value != normalized:
+            self._suppress_code_normalize = True
+            self.diag_code_var.set(normalized)
+            self._suppress_code_normalize = False
         self.update_preview()
 
     def refresh_diag_list(self) -> None:
@@ -529,7 +538,12 @@ class App(tk.Tk):
             count=self.count_var.get(),
             region=self.region_var.get(),
             techniques=self.tech_chips.get_selected(),
-            minutes=int(self.settings.get("treatment_minutes", C.DEFAULT_TREATMENT_MINUTES)),
+            minutes=V.clamp_int(
+                self.settings.get("treatment_minutes", C.DEFAULT_TREATMENT_MINUTES),
+                C.MIN_TREATMENT_MINUTES,
+                C.MAX_TREATMENT_MINUTES,
+                C.DEFAULT_TREATMENT_MINUTES,
+            ),
             improvement=self.improvement_var.get(),
             vas_before=self.vas_before_var.get(),
             vas_after=self.vas_after_var.get(),
@@ -540,12 +554,12 @@ class App(tk.Tk):
         """왼쪽 입력이 바뀔 때 호출. 자동 모드에서만 미리보기를 덮어쓴다."""
         self._refresh_missing_marks()
         if self.preview_mode != "auto":
-            # 직접 수정 중에는 덮어쓰지 않고, 실제로 변경됐을 때 한 번만 안내
             if not self._left_changed_in_edit:
                 self._left_changed_in_edit = True
                 self.show_status(
                     "왼쪽 항목이 변경되었습니다. [자동 생성 내용으로 갱신]을 누르면 반영됩니다.",
-                    "#856404", sticky=True,
+                    "#856404",
+                    sticky=True,
                 )
             return
         text = self.current_record().build_text()
@@ -575,7 +589,6 @@ class App(tk.Tk):
     def regenerate_preview(self) -> None:
         """직접 수정 내용을 버리고 왼쪽 입력값으로 다시 생성한다."""
         if self.preview_mode != "auto":
-            # 편집된 내용이 자동 생성 결과와 다를 때만 확인 창 표시
             current = self.output.get("1.0", "end-1c")
             if current != self.current_record().build_text() and not messagebox.askyesno(
                 "갱신 확인", "직접 수정한 내용이 사라지고 왼쪽 입력값으로 다시 생성됩니다.\n계속할까요?"
@@ -631,7 +644,7 @@ class App(tk.Tk):
                 if not text.strip():
                     self.show_status("복사할 내용이 없습니다.", MISSING_COLOR)
                     return
-                # 직접 수정 모드에서도 필수 항목 라벨이 비어 있으면 확인을 받는다
+
                 missing = R.missing_labels_in_text(text)
                 if missing:
                     if not messagebox.askyesno(
@@ -642,6 +655,16 @@ class App(tk.Tk):
                             f"필수 항목을 확인해주세요: {', '.join(missing)}", MISSING_COLOR, sticky=True
                         )
                         return
+
+                invalid = R.invalid_values_in_text(text)
+                if invalid:
+                    self.show_status(
+                        f"범위를 벗어난 값을 수정해주세요: {', '.join(invalid)}",
+                        MISSING_COLOR,
+                        sticky=True,
+                    )
+                    return
+
             self.clipboard_clear()
             self.clipboard_append(text)
             self.update()  # 클립보드 내용 유지
@@ -678,7 +701,7 @@ class App(tk.Tk):
         self.diag_code_var.set("")
         self.diag_name_var.set("")
         self.diag_search_var.set("")
-        self.count_var.set("1")
+        self.count_var.set(str(C.MIN_TREATMENT_COUNT))
         self.region_var.set("")
         self.purpose_chips.clear_selection()
         self.tech_chips.clear_selection()
@@ -690,7 +713,6 @@ class App(tk.Tk):
         self.date_selected = datetime.date.today()
         self.calendar.set_date(self.date_selected)
 
-        # 시행자는 기본 치료사로
         therapists = self.settings["therapists"]
         default = self.settings.get("default_therapist")
         if default and default in therapists:
@@ -700,7 +722,6 @@ class App(tk.Tk):
         else:
             self.therapist_var.set("")
 
-        # 직접 수정 내용도 초기화하고 자동 모드로 복귀
         self.preview_mode = "auto"
         self.edit_btn.config(text="✏ 직접 수정")
         self.regen_btn.pack_forget()
