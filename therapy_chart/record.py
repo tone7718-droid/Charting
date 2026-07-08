@@ -7,8 +7,9 @@ UI와 완전히 분리된 순수 로직 모듈로, 단위 테스트가 가능하
 from __future__ import annotations
 
 import datetime
+import re
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List
 
 from . import constants as C
 
@@ -70,9 +71,31 @@ def join_items(items: List[str]) -> str:
 
 
 def is_valid_vas(value: str) -> bool:
-    """VAS 값이 0~10 범위의 정수 문자열인지 확인한다."""
+    """VAS 값이 설정 범위의 정수 문자열인지 확인한다."""
     value = (value or "").strip()
-    return value.isdigit() and 0 <= int(value) <= 10
+    return value.isdigit() and C.MIN_VAS <= int(value) <= C.MAX_VAS
+
+
+def is_valid_count(value: str) -> bool:
+    """시행횟수가 설정 범위의 정수 문자열인지 확인한다."""
+    value = (value or "").strip()
+    return value.isdigit() and C.MIN_TREATMENT_COUNT <= int(value) <= C.MAX_TREATMENT_COUNT
+
+
+def _label_values(text: str) -> Dict[str, str]:
+    values = {}
+    for line in text.splitlines():
+        if ":" in line:
+            label, _, value = line.partition(":")
+            values[label.strip()] = value.strip()
+    return values
+
+
+def _digits_from_value(value: str, suffix: str = "") -> str:
+    value = (value or "").strip()
+    if suffix and value.endswith(suffix):
+        value = value[:-len(suffix)]
+    return value.strip()
 
 
 def missing_labels_in_text(text: str) -> List[str]:
@@ -82,16 +105,42 @@ def missing_labels_in_text(text: str) -> List[str]:
     필수 8개 라벨 중 라벨 줄이 아예 없거나 콜론 뒤 값이 비어 있으면 누락으로 본다.
     (치료 효과 평가는 선택 항목이라 검사 대상이 아니다.)
     """
-    values = {}
-    for line in text.splitlines():
-        if ":" in line:
-            label, _, value = line.partition(":")
-            values[label.strip()] = value.strip()
+    values = _label_values(text)
     missing = []
     for label in C.REQUIRED_FIELD_ORDER:
         if not values.get(label, "").strip():
             missing.append(label)
     return missing
+
+
+def invalid_values_in_text(text: str) -> List[str]:
+    """직접 수정된 미리보기 텍스트에서 범위를 벗어난 값을 찾는다.
+
+    사용자가 미리보기를 직접 고친 뒤에도 명백히 잘못된 차트값은 복사되지 않게 막는다.
+    """
+    values = _label_values(text)
+    invalid: List[str] = []
+
+    if C.LABEL_COUNT in values:
+        count = _digits_from_value(values[C.LABEL_COUNT], "회차")
+        if not is_valid_count(count):
+            invalid.append(f"{C.LABEL_COUNT}({C.MIN_TREATMENT_COUNT}~{C.MAX_TREATMENT_COUNT}회차)")
+
+    if C.LABEL_MINUTES in values:
+        minutes = _digits_from_value(values[C.LABEL_MINUTES], "분")
+        if not (
+            minutes.isdigit()
+            and C.MIN_TREATMENT_MINUTES <= int(minutes) <= C.MAX_TREATMENT_MINUTES
+        ):
+            invalid.append(f"{C.LABEL_MINUTES}({C.MIN_TREATMENT_MINUTES}~{C.MAX_TREATMENT_MINUTES}분)")
+
+    eval_text = values.get(C.LABEL_EVAL, "")
+    for before, after in re.findall(r"VAS\s*([0-9]+)\s*→\s*([0-9]+)", eval_text):
+        if not (is_valid_vas(before) and is_valid_vas(after)):
+            invalid.append(f"VAS({C.MIN_VAS}~{C.MAX_VAS})")
+            break
+
+    return invalid
 
 
 @dataclass
@@ -174,8 +223,7 @@ class TherapyRecord:
             missing.append(C.LABEL_THERAPIST)
         if not isinstance(self.date, datetime.date):
             missing.append(C.LABEL_DATE)
-        count = self.count.strip()
-        if not (count.isdigit() and int(count) >= 1):
+        if not is_valid_count(self.count):
             missing.append(C.LABEL_COUNT)
         if not self.region.strip():
             missing.append(C.LABEL_REGION)

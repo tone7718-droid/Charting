@@ -7,7 +7,7 @@
 
 APP_NAME = "도수치료 진료 기록지 입력 도우미"
 APP_ID = "TherapyChart"  # 데이터 폴더 이름 등에 사용
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 
 # ---------------------------------------------------------------------------
 # 기본 치료 목적 (다중 선택 토글)
@@ -30,6 +30,12 @@ DEFAULT_TECHNIQUES = [
     "Joint Mobilization",
     "Soft Tissue Mobilization",
 ]
+
+# 입력값 범위
+MIN_TREATMENT_COUNT = 1
+MAX_TREATMENT_COUNT = 999
+MIN_VAS = 0
+MAX_VAS = 10
 
 # 기본 치료 시간(분). 설정 파일에 저장되어 사용자가 변경할 수 있다.
 DEFAULT_TREATMENT_MINUTES = 30

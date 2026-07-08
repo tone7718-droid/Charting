@@ -16,7 +16,9 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Dict, List, Optional
 
 from . import constants as C
+from . import record as R
 from . import storage
+from . import ui_validation as V
 
 BASE_FONT = ("맑은 고딕", 11)
 
@@ -118,7 +120,6 @@ class ListEditor(ttk.Frame):
         self._changed()
         self.on_delete(item)
 
-    # 필요 시 하위 클래스/외부에서 교체하는 훅
     def on_rename(self, old: str, new: str) -> None:
         pass
 
@@ -260,11 +261,13 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(entry_row, text="진단코드:").pack(side="left")
         self.diag_code_var = tk.StringVar()
         ttk.Entry(entry_row, textvariable=self.diag_code_var, width=8, font=BASE_FONT).pack(side="left", padx=(4, 8))
+        self.diag_code_var.trace_add("write", self._normalize_diag_code_var)
         ttk.Label(entry_row, text="진단명:").pack(side="left")
         self.diag_name_var = tk.StringVar()
         ttk.Entry(entry_row, textvariable=self.diag_name_var, font=BASE_FONT).pack(
             side="left", fill="x", expand=True, padx=(4, 0)
         )
+        self._normalizing_diag_code = False
 
         btn_row = ttk.Frame(tab)
         btn_row.pack(fill="x", pady=(6, 0))
@@ -278,10 +281,23 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(csv_row, text="CSV 가져오기", command=self.diag_import_csv).pack(side="left")
         ttk.Button(csv_row, text="CSV 내보내기", command=self.diag_export_csv).pack(side="left", padx=(4, 0))
         ttk.Button(csv_row, text="최근 사용 목록 비우기", command=self.diag_clear_recent).pack(side="left", padx=(4, 0))
-        ttk.Label(tab, text="CSV 형식: 한 줄에 '진단코드,진단명' (첫 줄 헤더는 자동으로 건너뜁니다)",
-                  foreground="#888888").pack(anchor="w", pady=(4, 0))
+        ttk.Label(
+            tab,
+            text="CSV 형식: 한 줄에 '진단코드,진단명' (첫 줄 헤더는 자동으로 건너뜁니다)",
+            foreground="#888888",
+        ).pack(anchor="w", pady=(4, 0))
 
         self.refresh_diag_list()
+
+    def _normalize_diag_code_var(self, *_args) -> None:
+        if self._normalizing_diag_code:
+            return
+        value = self.diag_code_var.get()
+        normalized = R.normalize_code(value)
+        if value != normalized:
+            self._normalizing_diag_code = True
+            self.diag_code_var.set(normalized)
+            self._normalizing_diag_code = False
 
     def refresh_diag_list(self) -> None:
         query = self.diag_search_var.get().strip().lower()
@@ -308,12 +324,12 @@ class SettingsDialog(tk.Toplevel):
             self.diag_name_var.set(d.get("name", ""))
 
     def diag_add(self) -> None:
-        code = self.diag_code_var.get().strip().upper()
+        code = R.normalize_code(self.diag_code_var.get())
         name = self.diag_name_var.get().strip()
         if not (code or name):
             return
         for d in self.settings["diagnoses"]:
-            if d.get("code") == code and d.get("name") == name:
+            if R.normalize_code(d.get("code")) == code and d.get("name") == name:
                 messagebox.showinfo("안내", "이미 등록된 진단명입니다.", parent=self)
                 return
         self.settings["diagnoses"].append({"code": code, "name": name, "favorite": False})
@@ -325,14 +341,13 @@ class SettingsDialog(tk.Toplevel):
         if d is None:
             messagebox.showinfo("안내", "수정할 진단명을 목록에서 먼저 선택하세요.", parent=self)
             return
-        code = self.diag_code_var.get().strip().upper()
+        code = R.normalize_code(self.diag_code_var.get())
         name = self.diag_name_var.get().strip()
         if not (code or name):
             messagebox.showinfo("안내", "진단코드나 진단명 중 하나는 입력해야 합니다.", parent=self)
             return
-        # 다른 항목과 중복되는지 검사 (자기 자신은 제외)
         for other in self.settings["diagnoses"]:
-            if other is not d and other.get("code") == code and other.get("name") == name:
+            if other is not d and R.normalize_code(other.get("code")) == code and other.get("name") == name:
                 messagebox.showinfo("안내", "이미 등록된 진단명입니다.", parent=self)
                 return
         d["code"] = code
@@ -370,15 +385,17 @@ class SettingsDialog(tk.Toplevel):
             return
         try:
             items, skipped = storage.import_diagnoses_csv(path)
-        except Exception as exc:  # 잘못된 파일이어도 프로그램이 종료되지 않도록
+        except Exception as exc:
             messagebox.showerror("가져오기 실패", f"CSV 파일을 읽을 수 없습니다.\n{exc}", parent=self)
             return
-        existing = {(d.get("code"), d.get("name")) for d in self.settings["diagnoses"]}
+        existing = {(R.normalize_code(d.get("code")), d.get("name")) for d in self.settings["diagnoses"]}
         added = 0
         for item in items:
-            if (item["code"], item["name"]) not in existing:
+            key = (R.normalize_code(item["code"]), item["name"])
+            if key not in existing:
+                item["code"] = key[0]
                 self.settings["diagnoses"].append(item)
-                existing.add((item["code"], item["name"]))
+                existing.add(key)
                 added += 1
         self.refresh_diag_list()
         self.changed()
@@ -493,14 +510,37 @@ class SettingsDialog(tk.Toplevel):
         minutes_row = ttk.Frame(tab)
         minutes_row.pack(fill="x", pady=(10, 0))
         ttk.Label(minutes_row, text="치료시간(분):").pack(side="left")
-        self.minutes_var = tk.StringVar(value=str(self.settings.get("treatment_minutes", C.DEFAULT_TREATMENT_MINUTES)))
-        digits_only = (self.register(lambda s: s.isdigit() or s == ""), "%P")
+        initial_minutes = V.clamp_int(
+            self.settings.get("treatment_minutes", C.DEFAULT_TREATMENT_MINUTES),
+            C.MIN_TREATMENT_MINUTES,
+            C.MAX_TREATMENT_MINUTES,
+            C.DEFAULT_TREATMENT_MINUTES,
+        )
+        self.settings["treatment_minutes"] = initial_minutes
+        self.minutes_var = tk.StringVar(value=str(initial_minutes))
+        minutes_validate = (
+            self.register(
+                lambda s: V.is_empty_or_int_in_range(
+                    s, C.MIN_TREATMENT_MINUTES, C.MAX_TREATMENT_MINUTES
+                )
+            ),
+            "%P",
+        )
         ttk.Spinbox(
-            minutes_row, from_=1, to=600, textvariable=self.minutes_var, width=6,
-            validate="key", validatecommand=digits_only, font=BASE_FONT,
+            minutes_row,
+            from_=C.MIN_TREATMENT_MINUTES,
+            to=C.MAX_TREATMENT_MINUTES,
+            textvariable=self.minutes_var,
+            width=6,
+            validate="key",
+            validatecommand=minutes_validate,
+            font=BASE_FONT,
             command=self._minutes_changed,
         ).pack(side="left", padx=(4, 6))
-        ttk.Label(minutes_row, text="(기본 30분 — 진료 기록의 '치료시간' 항목에 사용)").pack(side="left")
+        ttk.Label(
+            minutes_row,
+            text=f"(기본 30분 — {C.MIN_TREATMENT_MINUTES}~{C.MAX_TREATMENT_MINUTES}분)",
+        ).pack(side="left")
         self.minutes_var.trace_add("write", lambda *_: self._minutes_changed())
 
     def _geometry_option_changed(self) -> None:
@@ -513,7 +553,9 @@ class SettingsDialog(tk.Toplevel):
 
     def _minutes_changed(self) -> None:
         value = self.minutes_var.get().strip()
-        if value.isdigit() and int(value) >= 1:
+        if not value:
+            return
+        if V.is_int_in_range(value, C.MIN_TREATMENT_MINUTES, C.MAX_TREATMENT_MINUTES):
             self.settings["treatment_minutes"] = int(value)
             self.changed()
 
