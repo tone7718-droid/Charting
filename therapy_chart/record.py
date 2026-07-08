@@ -2,8 +2,6 @@
 """진료 기록 문장 생성 및 필수 항목 검증 로직.
 
 UI와 완전히 분리된 순수 로직 모듈로, 단위 테스트가 가능하다.
-치료 효과 평가 항목은 2차 개발 예정 — 추가 시 이 모듈의
-TherapyRecord 필드와 build_lines()에 항목을 확장하면 된다.
 """
 
 from __future__ import annotations
@@ -22,12 +20,16 @@ THERAPIST_SUFFIX = "물리치료사"
 
 
 def normalize_code(code: str) -> str:
-    """진단코드를 정리한다. 소문자는 자동으로 대문자로 변환한다.
+    """진단코드를 정리한다.
 
-    >>> normalize_code("m751")
+    - 앞뒤 공백을 제거한다.
+    - 소문자는 대문자로 변환한다.
+    - KCD/EMR 입력 관례에 맞춰 점(.)은 제거한다. 예: M75.1 → M751
+
+    >>> normalize_code("m75.1")
     'M751'
     """
-    return (code or "").strip().upper()
+    return (code or "").strip().upper().replace(".", "")
 
 
 def diagnosis_display(code: str, name: str) -> str:
@@ -67,17 +69,23 @@ def join_items(items: List[str]) -> str:
     return ITEM_SEPARATOR.join(s for s in items if s)
 
 
+def is_valid_vas(value: str) -> bool:
+    """VAS 값이 0~10 범위의 정수 문자열인지 확인한다."""
+    value = (value or "").strip()
+    return value.isdigit() and 0 <= int(value) <= 10
+
+
 def missing_labels_in_text(text: str) -> List[str]:
     """직접 수정된 미리보기 텍스트에서 값이 비어 있는 필수 항목 라벨을 찾는다.
 
-    각 줄이 '라벨 : 값' 형식이라고 가정하고, 필수 8개 라벨 중
-    라벨 줄이 아예 없거나 콜론 뒤 값이 비어 있으면 누락으로 본다.
+    각 줄은 '라벨 : 값' 또는 '라벨: 값' 형식으로 인식한다.
+    필수 8개 라벨 중 라벨 줄이 아예 없거나 콜론 뒤 값이 비어 있으면 누락으로 본다.
     (치료 효과 평가는 선택 항목이라 검사 대상이 아니다.)
     """
     values = {}
     for line in text.splitlines():
-        if " : " in line:
-            label, _, value = line.partition(" : ")
+        if ":" in line:
+            label, _, value = line.partition(":")
             values[label.strip()] = value.strip()
     missing = []
     for label in C.REQUIRED_FIELD_ORDER:
@@ -109,13 +117,13 @@ class TherapyRecord:
         """치료 효과 평가 문구. 입력된 조각만 쉼표로 연결한다.
 
         예: "주관적 호전도 호전, VAS 6→3, ROM 개선"
-        VAS는 치료 전·후가 모두 입력됐을 때만 표시한다.
+        VAS는 치료 전·후가 모두 0~10 범위의 정수일 때만 표시한다.
         """
         parts: List[str] = []
         if self.improvement.strip():
             parts.append(f"주관적 호전도 {self.improvement.strip()}")
         before, after = self.vas_before.strip(), self.vas_after.strip()
-        if before and after:
+        if is_valid_vas(before) and is_valid_vas(after):
             parts.append(f"VAS {before}→{after}")
         if self.eval_note.strip():
             parts.append(self.eval_note.strip())
@@ -173,6 +181,9 @@ class TherapyRecord:
             missing.append(C.LABEL_REGION)
         if not [t for t in self.techniques if t.strip()]:
             missing.append(C.LABEL_TECHNIQUE)
-        if not (isinstance(self.minutes, int) and self.minutes >= 1):
+        if not (
+            isinstance(self.minutes, int)
+            and C.MIN_TREATMENT_MINUTES <= self.minutes <= C.MAX_TREATMENT_MINUTES
+        ):
             missing.append(C.LABEL_MINUTES)
         return missing

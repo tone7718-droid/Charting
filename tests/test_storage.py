@@ -42,6 +42,17 @@ class TestSettingsRoundtrip(StorageTestCase):
         self.assertEqual(reloaded["therapists"], ["홍길동", "김영희"])
         self.assertEqual(reloaded["default_therapist"], "홍길동")
 
+    def test_save_coerces_settings_in_memory_and_on_disk(self):
+        settings = storage.load_settings()
+        settings["treatment_minutes"] = 9999
+        settings["diagnoses"] = [{"code": "m75.1", "name": "회전근개증후군", "favorite": False}]
+        self.assertTrue(storage.save_settings(settings))
+        self.assertEqual(settings["treatment_minutes"], 600)
+        self.assertEqual(settings["diagnoses"][0]["code"], "M751")
+        reloaded = storage.load_settings()
+        self.assertEqual(reloaded["treatment_minutes"], 600)
+        self.assertEqual(reloaded["diagnoses"][0]["code"], "M751")
+
     def test_merge_fills_missing_keys(self):
         merged = storage.merge_with_defaults({"therapists": ["홍길동"]})
         self.assertEqual(merged["therapists"], ["홍길동"])
@@ -76,9 +87,10 @@ class TestCoerceSettings(StorageTestCase):
 
     def test_diagnoses_filtered_to_valid_dicts(self):
         merged = storage.merge_with_defaults({
-            "diagnoses": [{"code": "m1", "name": "x"}, "not a dict", 123, {"name": "y"}]
+            "diagnoses": [{"code": "m7.5", "name": "x"}, "not a dict", 123, {"name": "y"}]
         })
         self.assertEqual(len(merged["diagnoses"]), 2)
+        self.assertEqual(merged["diagnoses"][0]["code"], "M75")
         self.assertTrue(all(set(d) == {"code", "name", "favorite"} for d in merged["diagnoses"]))
 
     def test_bad_settings_file_loads_without_crash(self):
@@ -109,11 +121,12 @@ class TestDiagnosesCsv(StorageTestCase):
         return path
 
     def test_import_basic(self):
-        path = self._write_csv("진단코드,진단명\nm751,회전근개증후군\nM545,요통\n")
+        path = self._write_csv("진단코드,진단명\nm75.1,회전근개증후군\nM54.5,요통\n")
         items, skipped = storage.import_diagnoses_csv(path)
         self.assertEqual(skipped, 0)
-        self.assertEqual(items[0]["code"], "M751")  # 대문자 변환
+        self.assertEqual(items[0]["code"], "M751")  # 대문자 변환 + 점 제거
         self.assertEqual(items[0]["name"], "회전근개증후군")
+        self.assertEqual(items[1]["code"], "M545")
         self.assertEqual(len(items), 2)
 
     def test_import_excel_bom(self):
@@ -134,7 +147,7 @@ class TestDiagnosesCsv(StorageTestCase):
             storage.import_diagnoses_csv(path)
 
     def test_export_then_import_roundtrip(self):
-        diagnoses = [{"code": "M751", "name": "회전근개증후군", "favorite": True}]
+        diagnoses = [{"code": "M75.1", "name": "회전근개증후군", "favorite": True}]
         path = os.path.join(self.tmp.name, "out.csv")
         storage.export_diagnoses_csv(path, diagnoses)
         items, _ = storage.import_diagnoses_csv(path)

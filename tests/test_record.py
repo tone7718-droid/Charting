@@ -30,7 +30,11 @@ class TestNormalizeCode(unittest.TestCase):
         self.assertEqual(R.normalize_code("m751"), "M751")
 
     def test_whitespace_stripped(self):
-        self.assertEqual(R.normalize_code("  m54.5 "), "M54.5")
+        self.assertEqual(R.normalize_code("  m545 "), "M545")
+
+    def test_dot_removed(self):
+        self.assertEqual(R.normalize_code("m75.1"), "M751")
+        self.assertEqual(R.normalize_code(" M54.5 "), "M545")
 
     def test_empty(self):
         self.assertEqual(R.normalize_code(""), "")
@@ -45,7 +49,7 @@ class TestDiagnosisDisplay(unittest.TestCase):
         self.assertEqual(R.diagnosis_display("", "회전근개증후군"), "회전근개증후군")
 
     def test_code_only(self):
-        self.assertEqual(R.diagnosis_display("m751", ""), "M751")
+        self.assertEqual(R.diagnosis_display("m75.1", ""), "M751")
 
 
 class TestTherapistDisplay(unittest.TestCase):
@@ -110,7 +114,7 @@ class TestBuildText(unittest.TestCase):
         self.assertIn("진단명 : 회전근개증후군", text)
 
     def test_code_only_diagnosis(self):
-        text = sample_record(diagnosis_name="").build_text()
+        text = sample_record(diagnosis_name="", diagnosis_code="m75.1").build_text()
         self.assertIn("진단명 : M751", text)
 
 
@@ -139,6 +143,20 @@ class TestEvaluation(unittest.TestCase):
         self.assertEqual(sample_record(vas_after="3").eval_display(), "")
         self.assertEqual(sample_record(vas_before="6", vas_after="3").eval_display(), "VAS 6→3")
 
+    def test_vas_must_be_0_to_10_integer(self):
+        self.assertTrue(R.is_valid_vas("0"))
+        self.assertTrue(R.is_valid_vas("10"))
+        self.assertFalse(R.is_valid_vas("11"))
+        self.assertFalse(R.is_valid_vas("-1"))
+        self.assertFalse(R.is_valid_vas("3.5"))
+        self.assertEqual(sample_record(vas_before="99", vas_after="3").eval_display(), "")
+
+    def test_invalid_vas_does_not_hide_other_eval_notes(self):
+        self.assertEqual(
+            sample_record(vas_before="99", vas_after="3", eval_note="ROM 개선").eval_display(),
+            "ROM 개선",
+        )
+
     def test_improvement_only(self):
         self.assertEqual(sample_record(improvement="악화").eval_display(), "주관적 호전도 악화")
 
@@ -164,6 +182,19 @@ class TestMissingLabelsInText(unittest.TestCase):
             "치료시간 : 30분"
         )
         self.assertEqual(R.missing_labels_in_text(text), ["진단명", "시행부위"])
+
+    def test_accepts_colon_without_spaces(self):
+        text = (
+            "진단명:M751 회전근개증후군\n"
+            "치료목적:통증 감소\n"
+            "시행자:홍길동 물리치료사\n"
+            "시행일시:2026년 07월 03일\n"
+            "시행횟수:3회차\n"
+            "시행부위:허리\n"
+            "시행기법:Myofascial Release\n"
+            "치료시간:30분"
+        )
+        self.assertEqual(R.missing_labels_in_text(text), [])
 
     def test_missing_line_entirely(self):
         # 시행기법 줄을 통째로 지운 경우
@@ -198,6 +229,12 @@ class TestMissingFields(unittest.TestCase):
         self.assertIn("시행횟수", sample_record(count="0").missing_fields())
         self.assertIn("시행횟수", sample_record(count="abc").missing_fields())
         self.assertEqual(sample_record(count="1").missing_fields(), [])
+
+    def test_minutes_must_be_in_configured_range(self):
+        self.assertEqual(sample_record(minutes=C.MIN_TREATMENT_MINUTES).missing_fields(), [])
+        self.assertEqual(sample_record(minutes=C.MAX_TREATMENT_MINUTES).missing_fields(), [])
+        self.assertIn("치료시간", sample_record(minutes=0).missing_fields())
+        self.assertIn("치료시간", sample_record(minutes=C.MAX_TREATMENT_MINUTES + 1).missing_fields())
 
     def test_missing_order_follows_output_order(self):
         rec = R.TherapyRecord()  # 전부 비어 있음 (날짜/시간은 기본값 존재)
