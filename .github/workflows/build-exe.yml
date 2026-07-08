@@ -16,7 +16,7 @@ concurrency:
 # 이 브랜치에 대한 push만 사용자용 latest 릴리스로 배포한다.
 # (다른 실험 브랜치를 push해도 사용자 다운로드본이 바뀌지 않도록)
 env:
-  DEPLOY_BRANCH: refs/heads/claude/therapy-record-form-exe-9d8xfm
+  DEPLOY_BRANCH: refs/heads/main
 
 jobs:
   build:
