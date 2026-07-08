@@ -70,9 +70,15 @@ def join_items(items: List[str]) -> str:
 
 
 def is_valid_vas(value: str) -> bool:
-    """VAS 값이 0~10 범위의 정수 문자열인지 확인한다."""
+    """VAS 값이 설정 범위의 정수 문자열인지 확인한다."""
     value = (value or "").strip()
-    return value.isdigit() and 0 <= int(value) <= 10
+    return value.isdigit() and C.MIN_VAS <= int(value) <= C.MAX_VAS
+
+
+def is_valid_count(value: str) -> bool:
+    """시행횟수가 설정 범위의 정수 문자열인지 확인한다."""
+    value = (value or "").strip()
+    return value.isdigit() and C.MIN_TREATMENT_COUNT <= int(value) <= C.MAX_TREATMENT_COUNT
 
 
 def missing_labels_in_text(text: str) -> List[str]:
@@ -174,8 +180,7 @@ class TherapyRecord:
             missing.append(C.LABEL_THERAPIST)
         if not isinstance(self.date, datetime.date):
             missing.append(C.LABEL_DATE)
-        count = self.count.strip()
-        if not (count.isdigit() and int(count) >= 1):
+        if not is_valid_count(self.count):
             missing.append(C.LABEL_COUNT)
         if not self.region.strip():
             missing.append(C.LABEL_REGION)
