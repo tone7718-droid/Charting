@@ -16,36 +16,31 @@ from typing import Dict, List, Optional
 from . import constants as C
 from . import record as R
 from . import storage
+from . import theme as T
 from . import ui_validation as V
 from .panels.preview_panel import PreviewPanel
 from .settings_dialog import SettingsDialog
-from .widgets import ACCENT, CalendarWidget, ChipGroup, ScrollableFrame
+from .widgets import CalendarWidget, ChipGroup, ScrollableFrame
 
-BASE_FONT = ("맑은 고딕", 11)
-BOLD_FONT = ("맑은 고딕", 11, "bold")
-TITLE_FONT = ("맑은 고딕", 12, "bold")
+BASE_FONT = T.BASE_FONT
+BOLD_FONT = T.BOLD_FONT
+TITLE_FONT = T.TITLE_FONT
 
-MISSING_COLOR = "#d9534f"   # 필수 항목 누락 강조색
-OK_COLOR = "#2e8b57"
+MISSING_COLOR = T.DANGER
+OK_COLOR = T.SUCCESS
 
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{C.APP_NAME} v{C.APP_VERSION}")
-        self.minsize(1000, 640)
+        self.minsize(1040, 680)
         self._set_window_icon()
+
+        T.configure_styles(self)
 
         self.settings: Dict = storage.load_settings()
         self._restore_geometry()
-
-        style = ttk.Style(self)
-        try:
-            style.theme_use("vista")
-        except tk.TclError:
-            pass
-        style.configure(".", font=BASE_FONT)
-        style.configure("TCheckbutton", font=BASE_FONT)
 
         # ------------------------- 입력 상태 -------------------------
         self.diag_code_var = tk.StringVar()
@@ -122,15 +117,19 @@ class App(tk.Tk):
     def build_ui(self) -> None:
         # 치료사 미등록 안내 배너
         self.banner = tk.Label(
-            self, text="⚠ 설정에서 치료사를 먼저 등록해주세요.",
-            font=BOLD_FONT, bg="#fff3cd", fg="#856404", pady=6,
+            self,
+            text="⚠ 설정에서 치료사를 먼저 등록해주세요.",
+            font=BOLD_FONT,
+            bg=T.WARNING_SOFT,
+            fg=T.WARNING,
+            pady=8,
         )
 
         paned = ttk.PanedWindow(self, orient="horizontal")
         paned.pack(fill="both", expand=True)
 
         left_scroll = ScrollableFrame(paned)
-        right = ttk.Frame(paned)
+        right = ttk.Frame(paned, style="App.TFrame")
         paned.add(left_scroll, weight=1)
         paned.add(right, weight=1)
         left = left_scroll.inner
@@ -143,9 +142,9 @@ class App(tk.Tk):
 
         def section(parent, title: str, field_label: Optional[str] = None) -> ttk.Frame:
             """제목 라벨을 따로 가진 LabelFrame 생성 (누락 강조용)."""
-            lbl = ttk.Label(parent, text=title, font=TITLE_FONT, foreground=ACCENT)
-            frame = ttk.LabelFrame(parent, labelwidget=lbl, padding=10)
-            frame.pack(fill="x", pady=(0, 10))
+            lbl = ttk.Label(parent, text=title, font=TITLE_FONT, foreground=T.ACCENT, style="Title.TLabel")
+            frame = ttk.LabelFrame(parent, labelwidget=lbl, padding=12, style="Card.TLabelframe")
+            frame.pack(fill="x", pady=(0, 12))
             if field_label:
                 self._field_titles[field_label] = lbl
                 lbl._normal_text = title  # type: ignore[attr-defined]
@@ -153,34 +152,46 @@ class App(tk.Tk):
 
         # ① 진단명 ------------------------------------------------------
         f_diag = section(left, "① 진단명", C.LABEL_DIAGNOSIS)
-        code_row = ttk.Frame(f_diag)
+        code_row = ttk.Frame(f_diag, style="Card.TFrame")
         code_row.pack(fill="x")
-        ttk.Label(code_row, text="진단코드:").pack(side="left")
+        ttk.Label(code_row, text="진단코드:", style="Card.TLabel").pack(side="left")
         ttk.Entry(code_row, textvariable=self.diag_code_var, width=9, font=BASE_FONT).pack(side="left", padx=(4, 10))
-        ttk.Label(code_row, text="진단명:").pack(side="left")
+        ttk.Label(code_row, text="진단명:", style="Card.TLabel").pack(side="left")
         ttk.Entry(code_row, textvariable=self.diag_name_var, font=BASE_FONT).pack(
             side="left", fill="x", expand=True, padx=(4, 0)
         )
 
-        recent_row = ttk.Frame(f_diag)
-        recent_row.pack(fill="x", pady=(6, 0))
-        ttk.Label(recent_row, text="최근 사용:").pack(side="left")
+        recent_row = ttk.Frame(f_diag, style="Card.TFrame")
+        recent_row.pack(fill="x", pady=(7, 0))
+        ttk.Label(recent_row, text="최근 사용:", style="Card.TLabel").pack(side="left")
         self.recent_diag_combo = ttk.Combobox(recent_row, state="readonly", font=BASE_FONT)
         self.recent_diag_combo.pack(side="left", fill="x", expand=True, padx=(4, 0))
         self.recent_diag_combo.bind("<<ComboboxSelected>>", self._on_recent_diag_selected)
 
-        search_row = ttk.Frame(f_diag)
-        search_row.pack(fill="x", pady=(6, 0))
-        ttk.Label(search_row, text="🔍 저장 목록 검색:").pack(side="left")
+        search_row = ttk.Frame(f_diag, style="Card.TFrame")
+        search_row.pack(fill="x", pady=(7, 0))
+        ttk.Label(search_row, text="🔍 저장 목록 검색:", style="Card.TLabel").pack(side="left")
         self.diag_search_var = tk.StringVar()
         ttk.Entry(search_row, textvariable=self.diag_search_var, font=BASE_FONT).pack(
             side="left", fill="x", expand=True, padx=(4, 0)
         )
         self.diag_search_var.trace_add("write", lambda *_: self.refresh_diag_list())
 
-        list_row = ttk.Frame(f_diag)
-        list_row.pack(fill="x", pady=(4, 0))
-        self.diag_list = tk.Listbox(list_row, height=5, font=BASE_FONT, activestyle="none")
+        list_row = ttk.Frame(f_diag, style="Card.TFrame")
+        list_row.pack(fill="x", pady=(5, 0))
+        self.diag_list = tk.Listbox(
+            list_row,
+            height=5,
+            font=BASE_FONT,
+            activestyle="none",
+            bg=T.PREVIEW_BG,
+            fg=T.TEXT,
+            selectbackground=T.ACCENT_SOFT,
+            selectforeground=T.TEXT,
+            highlightbackground=T.BORDER,
+            highlightthickness=1,
+            relief="flat",
+        )
         diag_sb = ttk.Scrollbar(list_row, orient="vertical", command=self.diag_list.yview)
         self.diag_list.configure(yscrollcommand=diag_sb.set)
         self.diag_list.pack(side="left", fill="both", expand=True)
@@ -188,22 +199,24 @@ class App(tk.Tk):
         self.diag_list.bind("<<ListboxSelect>>", self._on_diag_list_selected)
         self._diag_view: List[Dict] = []
         ttk.Label(
-            f_diag, text="목록 클릭 시 자동 입력 · 추가/삭제/즐겨찾기/CSV 관리는 [설정]",
-            foreground="#888888",
-        ).pack(anchor="w", pady=(4, 0))
+            f_diag,
+            text="목록 클릭 시 자동 입력 · 추가/삭제/즐겨찾기/CSV 관리는 [설정]",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(5, 0))
 
         # ② 치료목적 ----------------------------------------------------
-        f_purpose = section(left, "② 치료목적 (클릭하여 다중 선택)", C.LABEL_PURPOSE)
+        f_purpose = section(left, "② 치료목적", C.LABEL_PURPOSE)
+        ttk.Label(f_purpose, text="해당 환자의 치료 목표를 클릭한 순서대로 선택합니다.", style="Muted.TLabel").pack(anchor="w", pady=(0, 4))
         self.purpose_chips = ChipGroup(
             f_purpose, self.settings["purposes"], per_row=2, on_change=self.update_preview
         )
         self.purpose_chips.pack(fill="x")
 
         # ③ 시행자 ------------------------------------------------------
-        f_ther = section(left, "③ 시행자 (물리치료사)", C.LABEL_THERAPIST)
-        row = ttk.Frame(f_ther)
+        f_ther = section(left, "③ 시행자", C.LABEL_THERAPIST)
+        row = ttk.Frame(f_ther, style="Card.TFrame")
         row.pack(fill="x")
-        ttk.Label(row, text="치료사 선택:").pack(side="left")
+        ttk.Label(row, text="치료사 선택:", style="Card.TLabel").pack(side="left")
         self.therapist_combo = ttk.Combobox(
             row, textvariable=self.therapist_var, state="readonly", font=BASE_FONT
         )
@@ -212,19 +225,19 @@ class App(tk.Tk):
         ttk.Button(row, text="＋ 등록", command=self.quick_add_therapist).pack(side="left")
         ttk.Label(
             f_ther, text="이름 뒤 '물리치료사'는 자동으로 붙습니다 · 관리는 [설정]",
-            foreground="#888888",
-        ).pack(anchor="w", pady=(4, 0))
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(5, 0))
 
         # ④ 시행일시 ----------------------------------------------------
-        f_date = section(left, "④ 시행일시 (달력에서 날짜 클릭)", C.LABEL_DATE)
+        f_date = section(left, "④ 시행일시", C.LABEL_DATE)
         self.calendar = CalendarWidget(f_date, on_select=self.on_date_selected)
         self.calendar.pack()
 
         # ⑤ 시행횟수 / 시행부위 / 치료시간 ------------------------------
-        f_misc = section(left, "⑤ 시행횟수 · 시행부위 · 치료시간")
-        row1 = ttk.Frame(f_misc)
-        row1.pack(fill="x", pady=2)
-        lbl_count = ttk.Label(row1, text="시행횟수:", width=10)
+        f_misc = section(left, "⑤ 치료 기본 정보")
+        row1 = ttk.Frame(f_misc, style="Card.TFrame")
+        row1.pack(fill="x", pady=3)
+        lbl_count = ttk.Label(row1, text="시행횟수:", width=10, style="Card.TLabel")
         lbl_count.pack(side="left")
         self._field_titles[C.LABEL_COUNT] = lbl_count
         lbl_count._normal_text = "시행횟수:"  # type: ignore[attr-defined]
@@ -242,11 +255,12 @@ class App(tk.Tk):
         ttk.Label(
             row1,
             text=f"회차 ({C.MIN_TREATMENT_COUNT}~{C.MAX_TREATMENT_COUNT}, '회차'는 자동)",
+            style="Card.TLabel",
         ).pack(side="left", padx=(4, 0))
 
-        row2 = ttk.Frame(f_misc)
-        row2.pack(fill="x", pady=2)
-        lbl_region = ttk.Label(row2, text="시행부위:", width=10)
+        row2 = ttk.Frame(f_misc, style="Card.TFrame")
+        row2.pack(fill="x", pady=3)
+        lbl_region = ttk.Label(row2, text="시행부위:", width=10, style="Card.TLabel")
         lbl_region.pack(side="left")
         self._field_titles[C.LABEL_REGION] = lbl_region
         lbl_region._normal_text = "시행부위:"  # type: ignore[attr-defined]
@@ -254,39 +268,41 @@ class App(tk.Tk):
         self.region_combo.pack(side="left", fill="x", expand=True)
         self.region_fav_btn = ttk.Button(row2, text="☆ 즐겨찾기", width=10, command=self.toggle_region_favorite)
         self.region_fav_btn.pack(side="left", padx=(4, 0))
-        ttk.Label(row2, text="(직접 입력 또는 ▼)").pack(side="left", padx=(4, 0))
+        ttk.Label(row2, text="(직접 입력 또는 ▼)", style="Card.TLabel").pack(side="left", padx=(4, 0))
 
-        row3 = ttk.Frame(f_misc)
-        row3.pack(fill="x", pady=2)
-        ttk.Label(row3, text="치료시간:", width=10).pack(side="left")
-        self.minutes_lbl = ttk.Label(row3, font=BOLD_FONT)
+        row3 = ttk.Frame(f_misc, style="Card.TFrame")
+        row3.pack(fill="x", pady=3)
+        ttk.Label(row3, text="치료시간:", width=10, style="Card.TLabel").pack(side="left")
+        self.minutes_lbl = ttk.Label(row3, font=BOLD_FONT, style="Card.TLabel")
         self.minutes_lbl.pack(side="left")
         ttk.Label(
             row3,
             text=f"(설정 > 데이터 탭, {C.MIN_TREATMENT_MINUTES}~{C.MAX_TREATMENT_MINUTES}분)",
+            style="Card.TLabel",
         ).pack(side="left", padx=(6, 0))
 
         # ⑥ 시행기법 ----------------------------------------------------
-        f_tech = section(left, "⑥ 시행기법 (클릭하여 다중 선택)", C.LABEL_TECHNIQUE)
+        f_tech = section(left, "⑥ 시행기법", C.LABEL_TECHNIQUE)
         self.tech_chips = ChipGroup(
             f_tech, self.settings["techniques"], per_row=2, on_change=self.update_preview
         )
         self.tech_chips.pack(fill="x")
 
         # ⑦ 치료 효과 평가 (선택 입력) ----------------------------------
-        f_eval = section(left, "⑦ 치료 효과 평가 (선택 입력 — 입력 시에만 출력)")
-        imp_row = ttk.Frame(f_eval)
-        imp_row.pack(fill="x", pady=2)
-        ttk.Label(imp_row, text="주관적 호전도:", width=12).pack(side="left")
+        f_eval = section(left, "⑦ 치료 효과 평가")
+        ttk.Label(f_eval, text="선택 입력입니다. 입력한 경우에만 진료 기록에 표시됩니다.", style="Muted.TLabel").pack(anchor="w", pady=(0, 4))
+        imp_row = ttk.Frame(f_eval, style="Card.TFrame")
+        imp_row.pack(fill="x", pady=3)
+        ttk.Label(imp_row, text="주관적 호전도:", width=12, style="Card.TLabel").pack(side="left")
         self.improvement_chips = ChipGroup(
             imp_row, C.IMPROVEMENT_OPTIONS, per_row=3, on_change=self._on_improvement_toggled
         )
         self.improvement_chips.pack(side="left")
 
-        vas_row = ttk.Frame(f_eval)
-        vas_row.pack(fill="x", pady=2)
-        ttk.Label(vas_row, text="VAS:", width=12).pack(side="left")
-        ttk.Label(vas_row, text="치료 전").pack(side="left")
+        vas_row = ttk.Frame(f_eval, style="Card.TFrame")
+        vas_row.pack(fill="x", pady=3)
+        ttk.Label(vas_row, text="VAS:", width=12, style="Card.TLabel").pack(side="left")
+        ttk.Label(vas_row, text="치료 전", style="Card.TLabel").pack(side="left")
         ttk.Spinbox(
             vas_row,
             from_=C.MIN_VAS,
@@ -298,7 +314,7 @@ class App(tk.Tk):
             validatecommand=vas_validate,
             font=BASE_FONT,
         ).pack(side="left", padx=(4, 10))
-        ttk.Label(vas_row, text="→ 치료 후").pack(side="left")
+        ttk.Label(vas_row, text="→ 치료 후", style="Card.TLabel").pack(side="left")
         ttk.Spinbox(
             vas_row,
             from_=C.MIN_VAS,
@@ -310,16 +326,16 @@ class App(tk.Tk):
             validatecommand=vas_validate,
             font=BASE_FONT,
         ).pack(side="left", padx=(4, 6))
-        ttk.Label(vas_row, text=f"({C.MIN_VAS}~{C.MAX_VAS}, 둘 다 입력 시 출력)").pack(side="left")
+        ttk.Label(vas_row, text=f"({C.MIN_VAS}~{C.MAX_VAS}, 둘 다 입력 시 출력)", style="Card.TLabel").pack(side="left")
 
-        note_row = ttk.Frame(f_eval)
-        note_row.pack(fill="x", pady=2)
-        ttk.Label(note_row, text="기타 평가:", width=12).pack(side="left")
+        note_row = ttk.Frame(f_eval, style="Card.TFrame")
+        note_row.pack(fill="x", pady=3)
+        ttk.Label(note_row, text="기타 평가:", width=12, style="Card.TLabel").pack(side="left")
         ttk.Entry(note_row, textvariable=self.eval_note_var, font=BASE_FONT).pack(
             side="left", fill="x", expand=True
         )
-        ttk.Label(f_eval, text="예: ROM 개선, 치료 전후 통증 유발 동작 감소", foreground="#888888").pack(
-            anchor="w", pady=(2, 0)
+        ttk.Label(f_eval, text="예: ROM 개선, 치료 전후 통증 유발 동작 감소", style="Muted.TLabel").pack(
+            anchor="w", pady=(4, 0)
         )
 
         # -------- 오른쪽: 미리보기 패널 --------
@@ -550,19 +566,28 @@ class App(tk.Tk):
             eval_note=self.eval_note_var.get(),
         )
 
+    def _update_completion(self, missing: List[str], invalid: Optional[List[str]] = None) -> None:
+        if hasattr(self, "preview_panel") and hasattr(self.preview_panel, "set_completion"):
+            total = len(C.REQUIRED_FIELD_ORDER)
+            completed = max(0, total - len(missing))
+            self.preview_panel.set_completion(completed, total, missing=missing, invalid=invalid or [])
+
     def update_preview(self) -> None:
         """왼쪽 입력이 바뀔 때 호출. 자동 모드에서만 미리보기를 덮어쓴다."""
         self._refresh_missing_marks()
+        rec = self.current_record()
+        missing = rec.missing_fields()
+        self._update_completion(missing)
         if self.preview_mode != "auto":
             if not self._left_changed_in_edit:
                 self._left_changed_in_edit = True
                 self.show_status(
-                    "왼쪽 항목이 변경되었습니다. [자동 생성 내용으로 갱신]을 누르면 반영됩니다.",
-                    "#856404",
+                    "왼쪽 항목이 변경되었습니다. [자동 생성으로 갱신]을 누르면 반영됩니다.",
+                    T.WARNING,
                     sticky=True,
                 )
             return
-        text = self.current_record().build_text()
+        text = rec.build_text()
         self.output.configure(state="normal")
         self.output.delete("1.0", "end")
         self.output.insert("1.0", text)
@@ -579,12 +604,12 @@ class App(tk.Tk):
             self.output.focus_set()
             self.edit_btn.config(text="✔ 편집 종료")
             self.regen_btn.pack(side="right", padx=(0, 6))
-            self.show_status("직접 수정 중입니다. 편집이 끝나면 [편집 종료]를 누르세요.", "#856404", sticky=True)
+            self.show_status("직접 수정 중입니다. 편집이 끝나면 [편집 종료]를 누르세요.", T.WARNING, sticky=True)
         else:  # editing → 편집 종료 (수정 내용 유지, 읽기 전용 전환)
             self.preview_mode = "manual"
             self.output.configure(state="disabled")
             self.edit_btn.config(text="✏ 직접 수정")
-            self.show_status("직접 수정한 내용이 유지됩니다. (자동 갱신 일시 중지)", "#856404", sticky=True)
+            self.show_status("직접 수정한 내용이 유지됩니다. (자동 갱신 일시 중지)", T.WARNING, sticky=True)
 
     def regenerate_preview(self) -> None:
         """직접 수정 내용을 버리고 왼쪽 입력값으로 다시 생성한다."""
@@ -611,7 +636,7 @@ class App(tk.Tk):
             if label in missing:
                 widget.configure(text=f"{normal} ⚠", foreground=MISSING_COLOR)
             else:
-                widget.configure(text=normal, foreground=ACCENT if normal.startswith(("①", "②", "③", "④", "⑥")) else "")
+                widget.configure(text=normal, foreground=T.ACCENT if normal.startswith(("①", "②", "③", "④", "⑥")) else T.TEXT)
 
     def _refresh_missing_marks(self) -> None:
         """입력이 바뀔 때, 강조돼 있던 항목 중 채워진 것의 표시를 해제한다."""
@@ -631,6 +656,7 @@ class App(tk.Tk):
             if self.preview_mode == "auto":
                 rec = self.current_record()
                 missing = rec.missing_fields()
+                self._update_completion(missing)
                 if missing:
                     self._mark_missing(missing)
                     self.show_status(
@@ -651,6 +677,7 @@ class App(tk.Tk):
                         "필수 항목 확인",
                         f"다음 필수 항목이 비어 있습니다:\n{', '.join(missing)}\n\n그래도 복사할까요?",
                     ):
+                        self._update_completion(missing)
                         self.show_status(
                             f"필수 항목을 확인해주세요: {', '.join(missing)}", MISSING_COLOR, sticky=True
                         )
@@ -658,6 +685,7 @@ class App(tk.Tk):
 
                 invalid = R.invalid_values_in_text(text)
                 if invalid:
+                    self._update_completion([], invalid=invalid)
                     self.show_status(
                         f"범위를 벗어난 값을 수정해주세요: {', '.join(invalid)}",
                         MISSING_COLOR,
@@ -668,6 +696,7 @@ class App(tk.Tk):
             self.clipboard_clear()
             self.clipboard_append(text)
             self.update()  # 클립보드 내용 유지
+            self._update_completion([])
             if self.preview_mode == "auto" and self.settings.get("auto_reset_after_copy"):
                 self.reset_inputs(confirm=False)
                 self.show_status("✔ 복사 완료 — 다음 환자 입력 준비됨", OK_COLOR)

@@ -9,20 +9,23 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Callable, List
 
+from . import theme as T
+
 WEEKDAYS_KR = ["일", "월", "화", "수", "목", "금", "토"]
 
-ACCENT = "#2f6fed"          # 주 강조색
-ACCENT_DARK = "#1d4fc4"
-CHIP_OFF_BG = "#f7f7f7"
-CHIP_OFF_FG = "#333333"
+# 기존 모듈 import 호환성을 위해 유지
+ACCENT = T.ACCENT
+ACCENT_DARK = T.ACCENT_DARK
+CHIP_OFF_BG = T.CHIP_OFF_BG
+CHIP_OFF_FG = T.CHIP_OFF_FG
 
 
 class CalendarWidget(ttk.Frame):
     """순수 tkinter 달력 위젯. 날짜 클릭 시 on_select(date)를 호출한다."""
 
     def __init__(self, master, on_select: Callable[[datetime.date], None],
-                 font=("맑은 고딕", 10)):
-        super().__init__(master)
+                 font=T.SMALL_FONT):
+        super().__init__(master, style="Card.TFrame")
         self.on_select = on_select
         self.font = font
         today = datetime.date.today()
@@ -30,14 +33,14 @@ class CalendarWidget(ttk.Frame):
         self.month = today.month
         self.selected = today
 
-        header = ttk.Frame(self)
-        header.pack(fill="x", pady=(0, 2))
+        header = ttk.Frame(self, style="Card.TFrame")
+        header.pack(fill="x", pady=(0, 4))
         ttk.Button(header, text="◀", width=3, command=self.prev_month).pack(side="left")
-        self.title_lbl = ttk.Label(header, font=(font[0], font[1], "bold"), anchor="center")
+        self.title_lbl = ttk.Label(header, font=(font[0], font[1], "bold"), anchor="center", style="Card.TLabel")
         self.title_lbl.pack(side="left", expand=True, fill="x")
         ttk.Button(header, text="▶", width=3, command=self.next_month).pack(side="right")
 
-        self.grid_frame = ttk.Frame(self)
+        self.grid_frame = tk.Frame(self, bg=T.CARD_BG)
         self.grid_frame.pack()
         self.draw()
 
@@ -72,36 +75,39 @@ class CalendarWidget(ttk.Frame):
         self.title_lbl.config(text=f"{self.year}년 {self.month}월")
 
         for col, name in enumerate(WEEKDAYS_KR):
-            color = "#d9534f" if col == 0 else ("#428bca" if col == 6 else "#333333")
-            tk.Label(self.grid_frame, text=name, font=self.font, fg=color, width=2).grid(
-                row=0, column=col, padx=1, pady=1
-            )
+            color = T.DANGER if col == 0 else (T.ACCENT if col == 6 else T.TEXT_MUTED)
+            tk.Label(
+                self.grid_frame, text=name, font=self.font, fg=color, width=2,
+                bg=T.CARD_BG,
+            ).grid(row=0, column=col, padx=2, pady=2)
 
         cal = calendar.Calendar(firstweekday=6)  # 일요일 시작
         today = datetime.date.today()
         for row, week in enumerate(cal.monthdayscalendar(self.year, self.month), start=1):
             for col, day in enumerate(week):
                 if day == 0:
-                    tk.Label(self.grid_frame, text="", width=2).grid(row=row, column=col)
+                    tk.Label(self.grid_frame, text="", width=2, bg=T.CARD_BG).grid(row=row, column=col)
                     continue
                 date = datetime.date(self.year, self.month, day)
                 is_selected = date == self.selected
-                bg = ACCENT if is_selected else ("#e8f0fe" if date == today else "#f0f0f0")
-                fg = "white" if is_selected else (
-                    "#d9534f" if col == 0 else ("#428bca" if col == 6 else "black")
+                bg = T.ACCENT if is_selected else (T.ACCENT_SOFT if date == today else T.SUBTLE_BG)
+                fg = T.TEXT_LIGHT if is_selected else (
+                    T.DANGER if col == 0 else (T.ACCENT if col == 6 else T.TEXT)
                 )
                 tk.Button(
                     self.grid_frame,
                     text=str(day),
                     width=2,
                     relief="flat",
+                    borderwidth=0,
                     font=self.font,
                     bg=bg,
                     fg=fg,
-                    activebackground=ACCENT,
-                    activeforeground="white",
+                    activebackground=T.ACCENT,
+                    activeforeground=T.TEXT_LIGHT,
+                    cursor="hand2",
                     command=lambda d=day: self.pick(d),
-                ).grid(row=row, column=col, padx=1, pady=1)
+                ).grid(row=row, column=col, padx=2, pady=2)
 
 
 class ToggleChip(tk.Button):
@@ -112,7 +118,7 @@ class ToggleChip(tk.Button):
     """
 
     def __init__(self, master, label: str, on_toggle: Callable[[str, bool], None],
-                 font=("맑은 고딕", 11)):
+                 font=T.BASE_FONT):
         self.label = label
         self._selected = False
         self._on_toggle = on_toggle
@@ -122,10 +128,11 @@ class ToggleChip(tk.Button):
             font=font,
             relief="solid",
             borderwidth=1,
-            bg=CHIP_OFF_BG,
-            fg=CHIP_OFF_FG,
-            activebackground="#e8f0fe",
-            activeforeground=CHIP_OFF_FG,
+            bg=T.CHIP_OFF_BG,
+            fg=T.CHIP_OFF_FG,
+            activebackground=T.ACCENT_SOFT,
+            activeforeground=T.CHIP_OFF_FG,
+            highlightbackground=T.CHIP_BORDER,
             padx=10,
             pady=5,
             cursor="hand2",
@@ -143,11 +150,15 @@ class ToggleChip(tk.Button):
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
         if selected:
-            self.config(text=f"✓ {self.label}", bg=ACCENT, fg="white",
-                        activebackground=ACCENT_DARK, activeforeground="white")
+            self.config(
+                text=f"✓ {self.label}", bg=T.ACCENT, fg=T.TEXT_LIGHT,
+                activebackground=T.ACCENT_DARK, activeforeground=T.TEXT_LIGHT,
+            )
         else:
-            self.config(text=self.label, bg=CHIP_OFF_BG, fg=CHIP_OFF_FG,
-                        activebackground="#e8f0fe", activeforeground=CHIP_OFF_FG)
+            self.config(
+                text=self.label, bg=T.CHIP_OFF_BG, fg=T.CHIP_OFF_FG,
+                activebackground=T.ACCENT_SOFT, activeforeground=T.CHIP_OFF_FG,
+            )
 
 
 class ChipGroup(ttk.Frame):
@@ -155,8 +166,8 @@ class ChipGroup(ttk.Frame):
 
     def __init__(self, master, items: List[str], per_row: int = 3,
                  on_change: Callable[[], None] = lambda: None,
-                 font=("맑은 고딕", 11)):
-        super().__init__(master)
+                 font=T.BASE_FONT):
+        super().__init__(master, style="Card.TFrame")
         self.per_row = per_row
         self.on_change = on_change
         self.font = font
@@ -201,14 +212,14 @@ class ScrollableFrame(ttk.Frame):
     """세로 스크롤이 가능한 컨테이너. .inner 프레임에 내용을 배치한다."""
 
     def __init__(self, master):
-        super().__init__(master)
-        canvas = tk.Canvas(self, highlightthickness=0)
+        super().__init__(master, style="App.TFrame")
+        canvas = tk.Canvas(self, highlightthickness=0, bg=T.APP_BG)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 
-        self.inner = ttk.Frame(canvas, padding=12)
+        self.inner = ttk.Frame(canvas, padding=16, style="App.TFrame")
         inner_id = canvas.create_window((0, 0), window=self.inner, anchor="nw")
 
         self.inner.bind(
