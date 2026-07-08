@@ -128,14 +128,20 @@ def _coerce_settings(merged: Dict) -> Dict:
         merged["diagnoses"] = list(defaults["diagnoses"])
     else:
         cleaned = []
+        seen = set()
         for d in diagnoses:
             if not isinstance(d, dict):
                 continue
-            cleaned.append({
+            item = {
                 "code": _normalize_code_value(d.get("code", "")),
                 "name": str(d.get("name", "")),
                 "favorite": bool(d.get("favorite", False)),
-            })
+            }
+            key = (item["code"], item["name"])
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(item)
         merged["diagnoses"] = cleaned
 
     # 최근 사용 진단명: {code, name} 딕셔너리 리스트
@@ -143,10 +149,18 @@ def _coerce_settings(merged: Dict) -> Dict:
     if not isinstance(recent, list):
         merged["recent_diagnoses"] = []
     else:
-        merged["recent_diagnoses"] = [
-            {"code": _normalize_code_value(d.get("code", "")), "name": str(d.get("name", ""))}
-            for d in recent if isinstance(d, dict)
-        ]
+        cleaned_recent = []
+        seen_recent = set()
+        for d in recent:
+            if not isinstance(d, dict):
+                continue
+            item = {"code": _normalize_code_value(d.get("code", "")), "name": str(d.get("name", ""))}
+            key = (item["code"], item["name"])
+            if key in seen_recent:
+                continue
+            seen_recent.add(key)
+            cleaned_recent.append(item)
+        merged["recent_diagnoses"] = cleaned_recent
 
     return merged
 
