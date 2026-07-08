@@ -31,8 +31,10 @@ DEFAULT_TECHNIQUES = [
     "Soft Tissue Mobilization",
 ]
 
-# 1차 버전 기본 치료 시간(분). 설정 파일에 저장되어 추후 변경 가능한 구조.
+# 기본 치료 시간(분). 설정 파일에 저장되어 사용자가 변경할 수 있다.
 DEFAULT_TREATMENT_MINUTES = 30
+MIN_TREATMENT_MINUTES = 1
+MAX_TREATMENT_MINUTES = 600
 
 # 치료 효과 평가 — 주관적 호전도 선택지 (단일 선택)
 IMPROVEMENT_OPTIONS = ["호전", "유지", "악화"]
