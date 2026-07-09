@@ -11,11 +11,15 @@ import datetime
 import os
 import traceback
 
+MAX_ERROR_LOG_BYTES = 1_000_000
+
 
 def _log_error(text: str) -> None:
     try:
         from . import storage
         path = os.path.join(storage.data_dir(), "error.log")
+        if os.path.exists(path) and os.path.getsize(path) > MAX_ERROR_LOG_BYTES:
+            os.replace(path, path + ".1")
         with open(path, "a", encoding="utf-8") as f:
             f.write(f"\n===== {datetime.datetime.now().isoformat()} =====\n{text}\n")
     except Exception:

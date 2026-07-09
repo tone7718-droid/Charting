@@ -40,6 +40,7 @@ class App(tk.Tk):
         T.configure_styles(self)
 
         self.settings: Dict = storage.load_settings()
+        self._settings_load_warning = storage.get_last_load_warning()
         self._restore_geometry()
 
         # ------------------------- 입력 상태 -------------------------
@@ -67,6 +68,8 @@ class App(tk.Tk):
         self._select_initial_therapist()
         self.refresh_from_settings()
         self.update_preview()
+        if self._settings_load_warning:
+            self.after(300, self._show_settings_load_warning)
 
         # 입력 변경 감지 → 미리보기 갱신
         self.diag_code_var.trace_add("write", self._on_code_changed)
@@ -404,8 +407,23 @@ class App(tk.Tk):
         """설정을 저장하고 성공 여부를 반환한다. 실패 시 상태 메시지 표시."""
         ok = storage.save_settings(self.settings)
         if not ok:
-            self.show_status("⚠ 설정 저장에 실패했습니다. 디스크 상태를 확인해주세요.", MISSING_COLOR, sticky=True)
+            if storage.get_last_save_error() == "conflict":
+                self.show_status(
+                    "⚠ 다른 창에서 설정이 변경되어 저장하지 않았습니다. 설정을 다시 확인해주세요.",
+                    MISSING_COLOR,
+                    sticky=True,
+                )
+            else:
+                self.show_status("⚠ 설정 저장에 실패했습니다. 디스크 상태를 확인해주세요.", MISSING_COLOR, sticky=True)
         return ok
+
+    def _show_settings_load_warning(self) -> None:
+        self.show_status("⚠ 설정 파일이 손상되어 기본값으로 시작했습니다.", MISSING_COLOR, sticky=True)
+        messagebox.showwarning(
+            C.APP_NAME,
+            self._settings_load_warning + "\n\n설정 창의 데이터 탭에서 백업 파일을 확인할 수 있습니다.",
+            parent=self,
+        )
 
     def on_settings_changed(self) -> bool:
         """설정 다이얼로그에서 변경이 있을 때마다 호출. 저장 성공 여부 반환."""

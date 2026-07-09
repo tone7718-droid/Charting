@@ -239,5 +239,6 @@ class ScrollableFrame(ttk.Frame):
                 bind_wheel(child)
 
         canvas.bind("<MouseWheel>", on_mousewheel)
-        # 내부 위젯이 모두 배치된 뒤 한 번 바인딩 (자식까지 재귀)
+        # 칩/버튼이 설정 변경으로 다시 생성될 때도 새 자식까지 휠 바인딩을 갱신한다.
+        self.inner.bind("<Configure>", lambda _e: bind_wheel(self.inner), add="+")
         self.inner.bind("<Map>", lambda _e: bind_wheel(self.inner), add="+")

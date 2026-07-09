@@ -24,6 +24,11 @@ from . import constants as C
 SETTINGS_FILENAME = "settings.json"
 BACKUP_BASENAME = "manual_therapy_helper_backup"
 
+_last_load_warning = ""
+_last_save_error = ""
+_settings_mtimes: Dict[int, Optional[float]] = {}
+_UNTRACKED = object()
+
 
 def data_dir() -> str:
     """사용자 쓰기 가능한 데이터 폴더 경로. 없으면 생성한다."""
@@ -37,6 +42,51 @@ def data_dir() -> str:
 
 def settings_file() -> str:
     return os.path.join(data_dir(), SETTINGS_FILENAME)
+
+
+def get_last_load_warning() -> str:
+    """마지막 설정 로드 중 사용자에게 안내할 경고 메시지."""
+    return _last_load_warning
+
+
+def get_last_save_error() -> str:
+    """마지막 설정 저장 실패 사유. 예: conflict, io."""
+    return _last_save_error
+
+
+def _file_mtime(path: str) -> Optional[float]:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def _track_settings_file(settings: Dict, path: str) -> None:
+    _settings_mtimes[id(settings)] = _file_mtime(path)
+
+
+def _backup_corrupt_settings(path: str) -> Optional[str]:
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    base = f"{path}.corrupt-{timestamp}"
+    candidate = base
+    suffix = 2
+    while os.path.exists(candidate):
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    try:
+        os.replace(path, candidate)
+        return candidate
+    except OSError:
+        return None
+
+
+def _mark_settings_corrupt(path: str) -> None:
+    global _last_load_warning
+    backup = _backup_corrupt_settings(path)
+    if backup:
+        _last_load_warning = f"설정 파일이 손상되어 기본값으로 시작합니다. 백업: {backup}"
+    else:
+        _last_load_warning = "설정 파일이 손상되어 기본값으로 시작합니다. 백업 파일을 만들지 못했습니다."
 
 
 def _normalize_code_value(code: object) -> str:
@@ -175,12 +225,27 @@ def merge_with_defaults(loaded: Dict) -> Dict:
 
 def load_settings() -> Dict:
     """설정을 읽는다. 파일이 없거나 손상됐으면 기본값을 반환한다."""
+    global _last_load_warning
+    _last_load_warning = ""
+    path = settings_file()
     try:
-        with open(settings_file(), "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
-            return merge_with_defaults(data)
-    except (OSError, ValueError):
+            settings = merge_with_defaults(data)
+            _track_settings_file(settings, path)
+            return settings
+        _mark_settings_corrupt(path)
+        settings = default_settings()
+        _track_settings_file(settings, path)
+        return settings
+    except ValueError:
+        if os.path.exists(path):
+            _mark_settings_corrupt(path)
+            settings = default_settings()
+            _track_settings_file(settings, path)
+            return settings
+    except OSError:
         pass
 
     # 신규 파일이 없으면 구버전 설정(치료사 목록)을 이어받는다.
@@ -194,6 +259,7 @@ def load_settings() -> Dict:
                 settings["therapists"] = [str(t) for t in old["therapists"]]
         except (OSError, ValueError):
             pass
+    _track_settings_file(settings, path)
     return settings
 
 
@@ -204,17 +270,26 @@ def save_settings(settings: Dict) -> bool:
     settings 딕셔너리도 정리된 값으로 갱신한다. 예를 들어 설정 창에서
     치료시간에 9999를 직접 입력해도 600분으로 보정되어 저장·화면 갱신된다.
     """
+    global _last_save_error
+    _last_save_error = ""
     path = settings_file()
     tmp = path + ".tmp"
     try:
+        expected_mtime = _settings_mtimes.get(id(settings), _UNTRACKED)
+        current_mtime = _file_mtime(path)
+        if expected_mtime is not _UNTRACKED and expected_mtime != current_mtime:
+            _last_save_error = "conflict"
+            return False
         cleaned = merge_with_defaults(settings)
         settings.clear()
         settings.update(cleaned)
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=2)
         os.replace(tmp, path)
+        _track_settings_file(settings, path)
         return True
     except OSError:
+        _last_save_error = "io"
         return False
 
 

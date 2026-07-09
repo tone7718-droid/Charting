@@ -63,6 +63,27 @@ class TestSettingsRoundtrip(StorageTestCase):
             f.write("{{{ not json")
         settings = storage.load_settings()
         self.assertEqual(settings["treatment_minutes"], 30)
+        backups = [
+            name for name in os.listdir(storage.data_dir())
+            if name.startswith("settings.json.corrupt-")
+        ]
+        self.assertEqual(len(backups), 1)
+        self.assertIn(backups[0], storage.get_last_load_warning())
+
+    def test_save_detects_concurrent_settings_change(self):
+        settings = storage.load_settings()
+        settings["therapists"] = ["홍길동"]
+        self.assertTrue(storage.save_settings(settings))
+
+        first_window = storage.load_settings()
+        second_window = storage.load_settings()
+        second_window["therapists"] = ["김영희"]
+        self.assertTrue(storage.save_settings(second_window))
+
+        first_window["therapists"] = ["박철수"]
+        self.assertFalse(storage.save_settings(first_window))
+        self.assertEqual(storage.get_last_save_error(), "conflict")
+        self.assertEqual(storage.load_settings()["therapists"], ["김영희"])
 
 
 class TestCoerceSettings(StorageTestCase):
