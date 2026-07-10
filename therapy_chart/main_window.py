@@ -32,7 +32,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{C.APP_NAME} v{C.APP_VERSION}")
-        self.minsize(1000, 640)
+        self.minsize(900, 560)  # 짧은 화면에서도 하단 버튼이 잘리지 않도록
         self._set_window_icon()
 
         self.settings: Dict = storage.load_settings()
@@ -728,17 +728,48 @@ class App(tk.Tk):
     # 종료 처리
     # ==================================================================
     def _restore_geometry(self) -> None:
+        """창을 화면 작업영역 안에 들어오도록 배치한다.
+
+        창이 화면보다 커지거나 아래로 밀려 하단 버튼(초기화·설정·복사)이
+        잘리는 것을 막기 위해, 항상 화면 크기에 맞춰 보정한다.
+        """
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+
         geometry = self.settings.get("window_geometry", "")
         if self.settings.get("remember_geometry", True) and geometry:
-            try:
-                self.geometry(geometry)
-                return
-            except tk.TclError:
-                pass
-        try:
-            self.state("zoomed")  # Windows: 최대화로 시작
-        except tk.TclError:
-            self.geometry("1280x800")
+            clamped = self._clamp_geometry(geometry, sw, sh)
+            if clamped:
+                try:
+                    self.geometry(clamped)
+                    return
+                except tk.TclError:
+                    pass
+
+        # 기본: 화면 작업영역에 맞춘 크기로 중앙 배치 (하단 여백 확보)
+        w = min(1440, sw - 80) if sw > 300 else 1200
+        h = min(880, sh - 120) if sh > 300 else 720
+        x = max(0, (sw - w) // 2)
+        y = max(0, (sh - h) // 2 - 20)
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+    @staticmethod
+    def _clamp_geometry(geometry: str, sw: int, sh: int):
+        """'WxH+X+Y' 문자열을 화면 안에 완전히 들어오도록 보정한다."""
+        import re
+        m = re.match(r"^(\d+)x(\d+)([+-]\d+)([+-]\d+)$", geometry.strip())
+        if not m:
+            return None
+        w, h, x, y = int(m[1]), int(m[2]), int(m[3]), int(m[4])
+        # 화면보다 큰 창은 화면 작업영역 크기로 축소 (하단 여백 확보)
+        w = min(w, sw - 40)
+        h = min(h, sh - 80)
+        # 화면 밖으로 나간 위치는 중앙으로 되돌림
+        if x < 0 or x + w > sw:
+            x = max(0, (sw - w) // 2)
+        if y < 0 or y + h > sh - 40:
+            y = max(0, (sh - h) // 2 - 20)
+        return f"{w}x{h}+{x}+{y}"
 
     def on_close(self) -> None:
         try:

@@ -9,7 +9,26 @@ from __future__ import annotations
 
 import datetime
 import os
+import sys
 import traceback
+
+
+def _enable_dpi_awareness() -> None:
+    """Windows 고해상도(배율) 디스플레이에서 창이 화면 밖으로 밀리거나
+    흐릿하게 표시되지 않도록 프로세스 DPI 인식을 활성화한다.
+
+    Tk 창을 만들기 전에 호출해야 하며, 실패해도 무시한다(비Windows 등)."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        try:
+            # PROCESS_PER_MONITOR_DPI_AWARE (Windows 8.1+)
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 
 def _log_error(text: str) -> None:
@@ -24,6 +43,7 @@ def _log_error(text: str) -> None:
 
 def main() -> None:
     try:
+        _enable_dpi_awareness()
         from .main_window import App
         app = App()
         app.mainloop()
