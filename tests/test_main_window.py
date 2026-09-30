@@ -10,6 +10,41 @@ from tests.test_record import sample_record
 
 
 class TestCopyAndClose(unittest.TestCase):
+    def test_one_sided_vas_copy_requires_confirmation(self):
+        for before, after in (("6", ""), ("", "0")):
+            for confirmed in (False, True):
+                with self.subTest(before=before, after=after, confirmed=confirmed):
+                    app = self.make_app()
+                    app.current_record = lambda: sample_record(vas_before=before, vas_after=after)
+                    with patch("therapy_chart.main_window.messagebox.askyesno", return_value=confirmed) as confirm:
+                        App.copy_output(app)
+                    confirm.assert_called_once()
+                    if confirmed:
+                        app.clipboard_append.assert_called_once()
+                        self.assertNotIn("VAS", app.clipboard_append.call_args.args[0])
+                    else:
+                        app.clipboard_clear.assert_not_called()
+                        app._remember_recents.assert_not_called()
+                        app.reset_inputs.assert_not_called()
+
+    def test_complete_or_empty_vas_copies_without_confirmation(self):
+        for before, after in (("", ""), ("6", "0")):
+            app = self.make_app()
+            app.current_record = lambda: sample_record(vas_before=before, vas_after=after)
+            with patch("therapy_chart.main_window.messagebox.askyesno") as confirm:
+                App.copy_output(app)
+            confirm.assert_not_called()
+            app.clipboard_append.assert_called_once()
+
+    def test_manual_invalid_date_is_not_copied(self):
+        app = self.make_app()
+        app.preview_mode = "manual"
+        app.output = Mock()
+        app.output.get.return_value = sample_record().build_text().replace("2026년 07월 03일", "2026년 02월 31일")
+        App.copy_output(app)
+        app.clipboard_clear.assert_not_called()
+        self.assertIn("시행일시", app.show_status.call_args.args[0])
+
     def make_app(self):
         return SimpleNamespace(
             preview_mode="auto", settings={"auto_reset_after_copy": False},

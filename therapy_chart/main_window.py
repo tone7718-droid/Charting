@@ -681,6 +681,15 @@ class App(tk.Tk):
                         f"필수 항목을 확인해주세요: {', '.join(missing)}", MISSING_COLOR, sticky=True
                     )
                     return
+                if bool(rec.vas_before.strip()) != bool(rec.vas_after.strip()):
+                    if not messagebox.askyesno(
+                        "VAS 입력 확인",
+                        "VAS 치료 전·후 중 한쪽이 비어 있습니다.\n"
+                        "VAS를 제외하고 복사할까요?",
+                        parent=self,
+                    ):
+                        self.show_status("VAS 치료 전·후를 모두 입력해주세요.", MISSING_COLOR, sticky=True)
+                        return
                 text = rec.build_text()
             else:
                 text = self.output.get("1.0", "end-1c")

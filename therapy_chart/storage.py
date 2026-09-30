@@ -444,8 +444,24 @@ def default_backup_filename(today: Optional[datetime.date] = None) -> str:
 
 def backup_to(path: str, settings: Dict) -> None:
     """설정 전체를 백업 파일로 내보낸다. (환자 정보는 애초에 저장되지 않음)"""
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=2)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=os.path.dirname(os.path.abspath(path)),
+            prefix="backup-", suffix=".tmp", delete=False,
+        ) as f:
+            tmp = f.name
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def restore_from(path: str) -> Dict:

@@ -402,7 +402,20 @@ class SettingsDialog(tk.Toplevel):
                 existing.add(key)
                 added += 1
         self.refresh_diag_list()
-        self.changed()
+        saved = self.changed()
+        if not saved:
+            reason = (
+                "다른 창에서 설정이 변경되었습니다. 최신 설정을 다시 불러온 뒤 다시 가져와주세요."
+                if storage.get_last_save_error() == "conflict"
+                else "디스크 여유 공간과 권한을 확인한 뒤 다시 저장해주세요."
+            )
+            messagebox.showerror(
+                "가져오기 저장 실패",
+                f"{added}개 진단명을 현재 창에 추가했지만 저장하지 못했습니다.\n"
+                "프로그램을 종료하거나 최신 설정을 불러오면 추가한 내용이 사라질 수 있습니다.\n" + reason,
+                parent=self,
+            )
+            return
         msg = f"{added}개 진단명을 추가했습니다."
         if skipped:
             msg += f" (형식이 잘못된 {skipped}줄은 건너뜀)"

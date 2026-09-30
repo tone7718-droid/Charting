@@ -12,6 +12,33 @@ from therapy_chart.settings_dialog import ListEditor, SettingsDialog
 
 
 class TestSettingsEditing(unittest.TestCase):
+    def test_csv_import_reports_save_failure_instead_of_success(self):
+        for reason in ("io", "conflict"):
+            with self.subTest(reason=reason):
+                dialog = self.make_dialog()
+                dialog.changed = Mock(return_value=False)
+                with patch("therapy_chart.settings_dialog.filedialog.askopenfilename", return_value="test.csv"), \
+                     patch.object(storage, "import_diagnoses_csv", return_value=([{"code": "TEST", "name": "test"}], 0)), \
+                     patch.object(storage, "get_last_save_error", return_value=reason), \
+                     patch("therapy_chart.settings_dialog.messagebox.showinfo") as info, \
+                     patch("therapy_chart.settings_dialog.messagebox.showerror") as error:
+                    SettingsDialog.diag_import_csv(dialog)
+                info.assert_not_called()
+                error.assert_called_once()
+                self.assertIn("저장하지 못했습니다", error.call_args.args[1])
+                self.assertTrue(any(d["code"] == "TEST" for d in self.settings["diagnoses"]))
+
+    def test_csv_import_reports_success_after_persisting(self):
+        dialog = self.make_dialog()
+        with patch("therapy_chart.settings_dialog.filedialog.askopenfilename", return_value="test.csv"), \
+             patch.object(storage, "import_diagnoses_csv", return_value=([{"code": "TEST", "name": "test"}], 0)), \
+             patch("therapy_chart.settings_dialog.messagebox.showinfo") as info, \
+             patch("therapy_chart.settings_dialog.messagebox.showerror") as error:
+            SettingsDialog.diag_import_csv(dialog)
+        error.assert_not_called()
+        info.assert_called_once()
+        self.assertTrue(any(d["code"] == "TEST" for d in storage.load_settings()["diagnoses"]))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.environment = patch.dict(os.environ, {"APPDATA": self.tmp.name})

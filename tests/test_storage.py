@@ -38,6 +38,27 @@ class StorageTestCase(unittest.TestCase):
 
 
 class TestSettingsRoundtrip(StorageTestCase):
+    def test_backup_failure_preserves_existing_file_and_cleans_temp(self):
+        path = os.path.join(self.tmp.name, "backup.json")
+        original = {"therapists": ["original"]}
+        for failure in ("dump", "fsync", "replace"):
+            with self.subTest(failure=failure):
+                storage.backup_to(path, original)
+                target = storage.json if failure == "dump" else storage.os
+                with patch.object(target, failure, side_effect=OSError("write failed")):
+                    with self.assertRaises(OSError):
+                        storage.backup_to(path, {"therapists": ["new"]})
+                with open(path, encoding="utf-8") as f:
+                    self.assertEqual(json.load(f), original)
+                self.assertEqual(os.listdir(self.tmp.name), ["backup.json"])
+
+    def test_backup_success_replaces_existing_file(self):
+        path = os.path.join(self.tmp.name, "backup.json")
+        storage.backup_to(path, {"therapists": ["original"]})
+        storage.backup_to(path, {"therapists": ["new"]})
+        self.assertEqual(storage.restore_from(path)["therapists"], ["new"])
+        self.assertEqual(os.listdir(self.tmp.name), ["backup.json"])
+
     def test_save_preserves_list_editor_references(self):
         settings = storage.load_settings()
         items = settings["therapists"]

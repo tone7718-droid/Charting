@@ -26,6 +26,18 @@ def sample_record(**overrides) -> R.TherapyRecord:
 
 
 class TestNormalizeCode(unittest.TestCase):
+    def test_manual_date_rejects_invalid_dates_and_formats(self):
+        for value in ("2026년 02월 31일", "2026년 02월 29일", "0000년 01월 01일",
+                      "2026년 13월 01일", "2026-09-30", "9" * 5000):
+            with self.subTest(value=value[:30]):
+                invalid = R.invalid_values_in_text(f"{C.LABEL_DATE} : {value}")
+                self.assertTrue(any(C.LABEL_DATE in item for item in invalid))
+
+    def test_manual_date_accepts_real_dates_in_output_format(self):
+        for value in ("2024년 02월 29일", "2026년 9월 30일", "2026년 09월 30일"):
+            with self.subTest(value=value):
+                self.assertEqual(R.invalid_values_in_text(f"{C.LABEL_DATE} : {value}"), [])
+
     def test_lowercase_converted_to_uppercase(self):
         self.assertEqual(R.normalize_code("m751"), "M751")
 

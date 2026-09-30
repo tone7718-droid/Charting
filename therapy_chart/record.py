@@ -120,6 +120,15 @@ def invalid_values_in_text(text: str) -> List[str]:
     values = _label_values(text)
     invalid: List[str] = []
 
+    if C.LABEL_DATE in values:
+        match = re.fullmatch(r"([0-9]{4})년\s+([0-9]{1,2})월\s+([0-9]{1,2})일", values[C.LABEL_DATE])
+        try:
+            if match is None:
+                raise ValueError
+            datetime.date(*(int(v) for v in match.groups()))
+        except ValueError:
+            invalid.append(f"{C.LABEL_DATE}(실제 날짜: YYYY년 MM월 DD일)")
+
     if C.LABEL_COUNT in values:
         count = _digits_from_value(values[C.LABEL_COUNT], "회차")
         if not is_valid_count(count):
