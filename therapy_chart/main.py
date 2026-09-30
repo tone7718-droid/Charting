@@ -9,9 +9,28 @@ from __future__ import annotations
 
 import datetime
 import os
+import sys
 import traceback
 
 MAX_ERROR_LOG_BYTES = 1_000_000
+
+
+def _enable_dpi_awareness() -> None:
+    """Tk 창을 만들기 전에 Windows 화면 배율 인식을 활성화한다."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+
+        try:
+            result = ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            if result == 0:
+                return
+        except (AttributeError, OSError):
+            pass
+        ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
 
 
 def _log_error(text: str) -> None:
@@ -28,6 +47,7 @@ def _log_error(text: str) -> None:
 
 def main() -> None:
     try:
+        _enable_dpi_awareness()
         from .main_window import App
         app = App()
         app.mainloop()

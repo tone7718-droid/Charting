@@ -211,6 +211,24 @@ class TestMissingLabelsInText(unittest.TestCase):
 
 
 class TestInvalidValuesInText(unittest.TestCase):
+    def test_manual_vas_rejects_entire_malformed_value(self):
+        for value in ("VAS -1→3", "VAS 6→-1", "VAS 6→3.5", "VAS 99->3",
+                      "VAS 6→", "VAS ²→3", "VAS 6→3 trailing"):
+            with self.subTest(value=value):
+                text = sample_record().build_text() + "\n치료 효과 평가 : " + value
+                self.assertIn("VAS(0~10)", R.invalid_values_in_text(text))
+
+    def test_manual_vas_accepts_both_arrows_and_other_evaluation_parts(self):
+        for value in ("주관적 호전도 호전, VAS 6→3, ROM 개선", "VAS 6 -> 3", "vas 0→10"):
+            with self.subTest(value=value):
+                self.assertEqual(R.invalid_values_in_text("치료 효과 평가 : " + value), [])
+
+    def test_digit_like_values_do_not_raise(self):
+        self.assertFalse(R.is_valid_count("²"))
+        self.assertFalse(R.is_valid_vas("²"))
+        self.assertFalse(R.is_valid_count("9" * 5000))
+        self.assertIn("치료시간(1~600분)", R.invalid_values_in_text("치료시간 : ²분"))
+
     def test_detects_manual_invalid_count(self):
         text = sample_record(count=str(C.MAX_TREATMENT_COUNT + 1)).build_text()
         self.assertIn("시행횟수(1~999회차)", R.invalid_values_in_text(text))

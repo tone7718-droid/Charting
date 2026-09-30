@@ -15,11 +15,6 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
-# 이 브랜치에 대한 push만 사용자용 latest 릴리스로 배포한다.
-# (다른 실험 브랜치를 push해도 사용자 다운로드본이 바뀌지 않도록)
-env:
-  DEPLOY_BRANCH: refs/heads/main
-
 jobs:
   build:
     runs-on: windows-latest
@@ -40,7 +35,7 @@ jobs:
         run: python -c "import therapy_chart.main, therapy_chart.main_window, therapy_chart.settings_dialog; print('import OK')"
 
       - name: Install PyInstaller
-        run: pip install "pyinstaller==6.21.0"
+        run: pip install -r requirements-build.txt
 
       - name: Build EXE
         run: pyinstaller TherapyChart.spec
@@ -65,23 +60,37 @@ jobs:
       - name: Build installer
         run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=${{ steps.appver.outputs.version }} installer\TherapyChart.iss'
 
+      - name: Verify release tag matches this source
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $tag = "v${{ steps.appver.outputs.version }}"
+          $refs = @(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
+          if ($LASTEXITCODE -ne 0) { throw "Cannot check release tag" }
+          if ($refs.Count -gt 0) {
+            $tagCommit = ($refs[-1] -split '\s+')[0]
+            if ($tagCommit -ne "${{ github.sha }}") {
+              throw "Release $tag already belongs to another commit. Bump APP_VERSION before publishing."
+            }
+          }
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: TherapyChart-installer
           path: installer/Output/TherapyChartSetup.exe
 
-      # 배포 브랜치에 대한 push일 때만 로그인 없이 받는 latest 릴리스를 갱신한다.
-      # Release 게시 실패가 테스트/빌드/아티팩트 업로드 성공까지 실패로 만들지 않도록 non-blocking 처리한다.
-      - name: Publish latest release
-        if: github.ref == env.DEPLOY_BRANCH
-        continue-on-error: true
+      # main의 빌드만 버전 태그로 배포하며, 게시 실패도 실행 실패로 표시한다.
+      - name: Publish versioned release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "최신 빌드 (자동 게시)"
+          tag_name: v${{ steps.appver.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: "TherapyChart v${{ steps.appver.outputs.version }}"
           body: |
-            푸시할 때마다 자동으로 갱신되는 최신 빌드입니다.
+            main에서 빌드한 TherapyChart v${{ steps.appver.outputs.version }}입니다.
+            소스 커밋: ${{ github.sha }}
 
             - **TherapyChartSetup.exe** — 설치 프로그램 (권장: 바탕화면 바로가기 생성)
             - **TherapyChart.exe** — 설치 없이 바로 실행하는 단일 파일

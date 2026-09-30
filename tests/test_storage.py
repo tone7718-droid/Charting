@@ -2,11 +2,23 @@
 """설정 저장 / CSV / 백업·복원 로직 단위 테스트."""
 
 import json
+import multiprocessing
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from therapy_chart import storage
+
+
+def _save_worker(appdata, ready, start, results, name):
+    os.environ["APPDATA"] = appdata
+    settings = storage.load_settings()
+    settings["therapists"] = [name]
+    ready.put(name)
+    if start.wait(10):
+        ok = storage.save_settings(settings)
+        results.put((ok, storage.get_last_save_error(), name))
 
 
 class StorageTestCase(unittest.TestCase):
@@ -26,6 +38,92 @@ class StorageTestCase(unittest.TestCase):
 
 
 class TestSettingsRoundtrip(StorageTestCase):
+    def test_save_preserves_list_editor_references(self):
+        settings = storage.load_settings()
+        items = settings["therapists"]
+        items.append("first")
+        self.assertTrue(storage.save_settings(settings))
+        self.assertIs(settings["therapists"], items)
+        items.append("second")
+        self.assertTrue(storage.save_settings(settings))
+        self.assertEqual(storage.load_settings()["therapists"], ["first", "second"])
+
+    def test_failed_save_leaves_in_memory_values_and_no_temp_file(self):
+        settings = storage.load_settings()
+        settings["treatment_minutes"] = 9999
+        with patch.object(storage.os, "replace", side_effect=OSError("disk error")):
+            self.assertFalse(storage.save_settings(settings))
+        self.assertEqual(settings["treatment_minutes"], 9999)
+        self.assertEqual(storage.get_last_save_error(), "io")
+        self.assertFalse(any(name.endswith(".tmp") for name in os.listdir(storage.data_dir())))
+
+    def test_replacement_is_applied_only_after_successful_save(self):
+        settings = storage.load_settings()
+        settings["therapists"] = ["original"]
+        self.assertTrue(storage.save_settings(settings))
+        with patch.object(storage.os, "replace", side_effect=OSError("disk error")):
+            self.assertFalse(storage.save_settings(settings, replacement={"therapists": ["restored"]}))
+        self.assertEqual(settings["therapists"], ["original"])
+        self.assertEqual(storage.load_settings()["therapists"], ["original"])
+        self.assertTrue(storage.save_settings(settings, replacement={"therapists": ["restored"]}))
+        self.assertEqual(settings["therapists"], ["restored"])
+        self.assertEqual(storage.load_settings()["therapists"], ["restored"])
+
+    def test_content_change_detected_even_when_timestamp_is_unchanged(self):
+        settings = storage.load_settings()
+        self.assertTrue(storage.save_settings(settings))
+        path = storage.settings_file()
+        stat = os.stat(path)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"therapists": ["external"]}, f)
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        self.assertFalse(storage.save_settings(settings))
+        self.assertEqual(storage.get_last_save_error(), "conflict")
+
+    def test_reload_recovers_from_conflict_and_preserves_lists(self):
+        stale = storage.load_settings()
+        latest = storage.load_settings()
+        latest["therapists"] = ["external"]
+        self.assertTrue(storage.save_settings(latest))
+        self.assertFalse(storage.save_settings(stale))
+        items = stale["therapists"]
+        storage.reload_settings(stale)
+        self.assertIs(items, stale["therapists"])
+        self.assertEqual(items, ["external"])
+        items.append("local")
+        self.assertTrue(storage.save_settings(stale))
+        self.assertEqual(storage.load_settings()["therapists"], ["external", "local"])
+
+    def test_two_processes_cannot_both_overwrite_same_revision(self):
+        settings = storage.load_settings()
+        self.assertTrue(storage.save_settings(settings))
+        context = multiprocessing.get_context("spawn")
+        ready, results = context.Queue(), context.Queue()
+        start = context.Event()
+        processes = [context.Process(target=_save_worker, args=(self.tmp.name, ready, start, results, name))
+                     for name in ("first", "second")]
+        try:
+            for process in processes:
+                process.start()
+            ready.get(timeout=10)
+            ready.get(timeout=10)
+            start.set()
+            outcomes = [results.get(timeout=10), results.get(timeout=10)]
+            self.assertEqual(sum(ok for ok, _, _ in outcomes), 1)
+            self.assertEqual([error for ok, error, _ in outcomes if not ok], ["conflict"])
+            winner = next(name for ok, _, name in outcomes if ok)
+            self.assertEqual(storage.load_settings()["therapists"], [winner])
+        finally:
+            start.set()
+            for process in processes:
+                if process.pid is not None:
+                    process.join(timeout=10)
+                    if process.is_alive():
+                        process.terminate()
+                        process.join()
+            ready.close()
+            results.close()
+
     def test_defaults_when_no_file(self):
         settings = storage.load_settings()
         self.assertEqual(settings["treatment_minutes"], 30)

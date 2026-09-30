@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List
 
 from . import constants as C
+from .ui_validation import is_int_in_range
 
 # 다중 선택 항목의 출력 구분자 (쉼표 + 공백)
 ITEM_SEPARATOR = ", "
@@ -72,14 +73,12 @@ def join_items(items: List[str]) -> str:
 
 def is_valid_vas(value: str) -> bool:
     """VAS 값이 설정 범위의 정수 문자열인지 확인한다."""
-    value = (value or "").strip()
-    return value.isdigit() and C.MIN_VAS <= int(value) <= C.MAX_VAS
+    return is_int_in_range(value, C.MIN_VAS, C.MAX_VAS)
 
 
 def is_valid_count(value: str) -> bool:
     """시행횟수가 설정 범위의 정수 문자열인지 확인한다."""
-    value = (value or "").strip()
-    return value.isdigit() and C.MIN_TREATMENT_COUNT <= int(value) <= C.MAX_TREATMENT_COUNT
+    return is_int_in_range(value, C.MIN_TREATMENT_COUNT, C.MAX_TREATMENT_COUNT)
 
 
 def _label_values(text: str) -> Dict[str, str]:
@@ -128,15 +127,13 @@ def invalid_values_in_text(text: str) -> List[str]:
 
     if C.LABEL_MINUTES in values:
         minutes = _digits_from_value(values[C.LABEL_MINUTES], "분")
-        if not (
-            minutes.isdigit()
-            and C.MIN_TREATMENT_MINUTES <= int(minutes) <= C.MAX_TREATMENT_MINUTES
-        ):
+        if not is_int_in_range(minutes, C.MIN_TREATMENT_MINUTES, C.MAX_TREATMENT_MINUTES):
             invalid.append(f"{C.LABEL_MINUTES}({C.MIN_TREATMENT_MINUTES}~{C.MAX_TREATMENT_MINUTES}분)")
 
     eval_text = values.get(C.LABEL_EVAL, "")
-    for before, after in re.findall(r"VAS\s*([0-9]+)\s*→\s*([0-9]+)", eval_text):
-        if not (is_valid_vas(before) and is_valid_vas(after)):
+    for value in re.findall(r"\bVAS\b([^,\n]*)", eval_text, flags=re.IGNORECASE):
+        match = re.fullmatch(r"\s*([0-9]+)\s*(?:→|->)\s*([0-9]+)\s*", value)
+        if match is None or not all(is_valid_vas(v) for v in match.groups()):
             invalid.append(f"VAS({C.MIN_VAS}~{C.MAX_VAS})")
             break
 

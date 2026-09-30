@@ -18,9 +18,10 @@ from typing import Callable, Dict, List, Optional
 from . import constants as C
 from . import record as R
 from . import storage
+from . import theme as T
 from . import ui_validation as V
 
-BASE_FONT = ("맑은 고딕", 11)
+BASE_FONT = T.BASE_FONT
 
 
 class ListEditor(ttk.Frame):
@@ -130,7 +131,7 @@ class ListEditor(ttk.Frame):
 class SettingsDialog(tk.Toplevel):
     """설정 창. settings dict를 직접 수정한다."""
 
-    def __init__(self, master, settings: Dict, on_change: Callable[[], None]):
+    def __init__(self, master, settings: Dict, on_change: Callable[..., bool]):
         super().__init__(master)
         self.title("설정")
         self.settings = settings
@@ -152,9 +153,12 @@ class SettingsDialog(tk.Toplevel):
 
         ttk.Button(self, text="닫기", command=self.destroy).pack(pady=(0, 10))
 
-    def changed(self):
+    def changed(self, replacement: Optional[Dict] = None) -> bool:
         """설정이 바뀔 때마다 호출 — 메인 창이 저장/갱신한다. 저장 성공 여부 반환."""
-        return self.on_change()
+        saved = self.on_change() if replacement is None else self.on_change(replacement)
+        # 저장 중 정규화된 진단 객체를 다시 참조한다.
+        self.refresh_diag_list()
+        return saved
 
     # ------------------------------------------------------------------
     # 치료사
@@ -484,6 +488,7 @@ class SettingsDialog(tk.Toplevel):
         path_entry = ttk.Entry(path_row, textvariable=path_var, font=BASE_FONT, state="readonly")
         path_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
         ttk.Button(path_row, text="폴더 열기", command=self.open_data_folder).pack(side="left")
+        ttk.Button(tab, text="최신 설정 다시 불러오기", command=self.reload_settings).pack(anchor="w", pady=(0, 6))
 
         ttk.Separator(tab).pack(fill="x", pady=6)
 
@@ -571,6 +576,24 @@ class SettingsDialog(tk.Toplevel):
         except OSError:
             messagebox.showinfo("안내", f"폴더를 열 수 없습니다.\n경로: {path}", parent=self)
 
+    def reload_settings(self) -> None:
+        if not messagebox.askyesno(
+            "설정 다시 불러오기",
+            "저장된 최신 설정을 불러옵니다.\n현재 창의 저장되지 않은 설정 변경은 사라집니다.\n계속할까요?",
+            parent=self,
+        ):
+            return
+        try:
+            storage.reload_settings(self.settings)
+        except OSError as exc:
+            messagebox.showerror("불러오기 실패", f"설정 파일을 읽을 수 없습니다.\n{exc}", parent=self)
+            return
+        self.master.refresh_from_settings()
+        warning = storage.get_last_load_warning()
+        if warning:
+            messagebox.showwarning("설정 확인", warning, parent=self)
+        self.destroy()
+
     def backup(self) -> None:
         path = filedialog.asksaveasfilename(
             parent=self, title="백업 파일로 내보내기", defaultextension=".json",
@@ -608,13 +631,14 @@ class SettingsDialog(tk.Toplevel):
                 parent=self,
             )
             return
-        self.settings.clear()
-        self.settings.update(restored)
-        saved = self.changed()
+        saved = self.changed(replacement=restored)
         if saved is False:
             messagebox.showerror(
                 "복원 실패",
-                "복원한 내용을 디스크에 저장하지 못했습니다.\n디스크 여유 공간과 권한을 확인해주세요.",
+                "복원한 내용을 저장하지 못해 기존 설정을 유지합니다.\n"
+                + ("다른 창에서 설정이 변경되었습니다. 최신 설정을 다시 불러온 뒤 복원해주세요."
+                   if storage.get_last_save_error() == "conflict"
+                   else "디스크 여유 공간과 권한을 확인해주세요."),
                 parent=self,
             )
             return

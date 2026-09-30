@@ -13,18 +13,18 @@ def is_empty_or_int_in_range(value: str, minimum: int, maximum: int) -> bool:
     value = (value or "").strip()
     if value == "":
         return True
-    if not value.isdigit():
-        return False
-    number = int(value)
-    return minimum <= number <= maximum
+    return is_int_in_range(value, minimum, maximum)
 
 
 def is_int_in_range(value: str, minimum: int, maximum: int) -> bool:
     """minimum~maximum 범위의 정수 문자열이면 True."""
     value = (value or "").strip()
-    if not value.isdigit():
+    if not (value.isascii() and value.isdecimal()):
         return False
-    number = int(value)
+    try:
+        number = int(value)
+    except ValueError:
+        return False
     return minimum <= number <= maximum
 
 
@@ -35,6 +35,6 @@ def clamp_int(value, minimum: int, maximum: int, default: int) -> int:
     """
     try:
         number = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         number = default
     return max(minimum, min(maximum, number))

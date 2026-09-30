@@ -29,6 +29,15 @@ class TestUiValidation(unittest.TestCase):
         self.assertEqual(V.clamp_int("-3", 1, 10, 3), 1)
         self.assertEqual(V.clamp_int("abc", 1, 10, 3), 3)
 
+    def test_digit_like_and_very_long_values_are_rejected(self):
+        for value in ("²", "１２", "9" * 5000):
+            with self.subTest(value=value[:10]):
+                self.assertFalse(V.is_int_in_range(value, 0, 10))
+                self.assertFalse(V.is_empty_or_int_in_range(value, 0, 10))
+
+    def test_non_finite_minutes_use_default(self):
+        self.assertEqual(V.clamp_int(float("inf"), 1, 600, 30), 30)
+
 
 if __name__ == "__main__":
     unittest.main()

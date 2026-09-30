@@ -23,7 +23,7 @@
 코드가 push될 때마다 GitHub이 자동으로 Windows용 실행 파일을 빌드합니다.
 
 1. **Releases 페이지에서 바로 다운로드 (권장, 로그인 불필요)**:
-   https://github.com/tone7718-droid/Charting/releases/tag/latest
+   https://github.com/tone7718-droid/Charting/releases/latest
    - `TherapyChartSetup.exe` — 설치 프로그램 (바탕화면 바로가기 생성)
    - `TherapyChart.exe` — 설치 없이 바로 실행
 2. 또는 GitHub 저장소의 **Actions** 탭(로그인 필요) → 가장 최근의 **Build Windows EXE** 실행 클릭
@@ -99,6 +99,10 @@ CSV의 진단코드는 가져오기/내보내기 과정에서 대문자·점 없
   프로그램 종료 시 작성 중이던 내용은 저장되지 않습니다.
 - 백업: 설정 > 데이터 > 백업 내보내기 (기본 파일명 `manual_therapy_helper_backup_YYYYMMDD.json`).
   복원 시 확인 창이 표시되고, 잘못된 파일이면 기존 데이터를 그대로 유지합니다.
+  저장에 실패한 복원 내용도 적용하지 않습니다.
+- 여러 창의 저장은 파일 잠금과 내용 비교로 보호합니다. 다른 창에서 설정을 바꾸었으면
+  저장을 중단하고 안내합니다. **설정 > 데이터 > 최신 설정 다시 불러오기**로 갱신한 뒤
+  변경을 다시 적용하세요. 다시 불러오면 현재 창의 저장되지 않은 설정 변경은 사라집니다.
 
 ## 기술 스택 선택 이유
 
@@ -119,11 +123,13 @@ python therapy_chart_app.py
 python -m unittest discover -s tests -v
 
 # EXE 빌드
-pip install pyinstaller
+pip install -r requirements-build.txt
 pyinstaller TherapyChart.spec        # → dist/TherapyChart.exe
 
 # 설치 프로그램 빌드 (Inno Setup 6 설치 후)
-ISCC.exe installer\TherapyChart.iss  # → installer/Output/TherapyChartSetup.exe
+# PowerShell: 앱 버전을 설치 프로그램에 전달
+$appVersion = python -c "from therapy_chart.constants import APP_VERSION; print(APP_VERSION)"
+ISCC.exe "/DAppVersion=$appVersion" installer\TherapyChart.iss  # → installer/Output/TherapyChartSetup.exe
 ```
 
 코드 구조:
@@ -164,5 +170,11 @@ installer/TherapyChart.iss    Inno Setup 설치 프로그램 스크립트
 
 - EXE가 코드 서명되지 않아 첫 실행 시 SmartScreen 경고가 표시될 수 있습니다.
 - 설치 프로그램 UI 언어는 영어입니다(설치되는 프로그램 자체는 한국어).
-- 프로그램을 동시에 두 개 이상 실행하면 마지막에 닫힌 창의 설정이 우선 저장됩니다
-  (단일 PC 단독 사용을 전제로 하며, 보통은 문제가 되지 않습니다).
+- 다른 창에서 설정을 변경한 경우 자동 병합하지 않습니다. 최신 설정을 다시 불러온 뒤
+  변경을 다시 적용해야 합니다. 종료 시 저장에 실패하면 저장 없이 종료할지 확인합니다.
+
+릴리스는 main 빌드를 `v2.1.3` 같은 버전 태그로 게시하고 소스 커밋을 함께 기록합니다.
+실험 브랜치 빌드는 Actions의 Artifacts에서만 받습니다. 릴리스 게시 실패도 Actions에서 실패로 표시됩니다.
+새 버전을 main에 반영할 때는 `constants.APP_VERSION`과 CHANGELOG를 함께 갱신하세요.
+이미 다른 커밋에 연결된 버전 태그로는 새 빌드를 게시하지 않습니다.
+아이콘을 다시 생성할 때만 별도로 Pillow가 필요합니다 (`pip install Pillow`).

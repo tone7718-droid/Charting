@@ -14,9 +14,13 @@ from __future__ import annotations
 import copy
 import csv
 import datetime
+import hashlib
 import json
 import os
 import sys
+import tempfile
+import time
+from contextlib import contextmanager
 from typing import Dict, List, Optional, Tuple
 
 from . import constants as C
@@ -26,8 +30,13 @@ BACKUP_BASENAME = "manual_therapy_helper_backup"
 
 _last_load_warning = ""
 _last_save_error = ""
-_settings_mtimes: Dict[int, Optional[float]] = {}
-_UNTRACKED = object()
+
+class _Settings(dict):
+    """읽은 파일의 내용 해시를 함께 보관하는 설정 딕셔너리."""
+
+    def __init__(self, values: Dict, revision: Optional[str]):
+        super().__init__(values)
+        self.revision = revision
 
 
 def data_dir() -> str:
@@ -54,15 +63,66 @@ def get_last_save_error() -> str:
     return _last_save_error
 
 
-def _file_mtime(path: str) -> Optional[float]:
+def _file_revision(path: str) -> Optional[str]:
     try:
-        return os.path.getmtime(path)
-    except OSError:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except FileNotFoundError:
         return None
 
 
-def _track_settings_file(settings: Dict, path: str) -> None:
-    _settings_mtimes[id(settings)] = _file_mtime(path)
+@contextmanager
+def _settings_lock(path: str):
+    """로드와 저장을 같은 프로세스 간 잠금으로 보호한다."""
+    with open(path + ".lock", "a+b") as lock:
+        if os.fstat(lock.fileno()).st_size == 0:
+            lock.write(b"\0")
+            lock.flush()
+        if sys.platform.startswith("win"):
+            import msvcrt
+
+            def acquire():
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+
+            def release():
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            def acquire():
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            def release():
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                acquire()
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            release()
+
+
+def _apply_settings(settings: Dict, values: Dict) -> None:
+    """열린 목록 편집기가 참조하는 리스트를 유지하며 설정을 갱신한다."""
+    for key in list(settings):
+        if key not in values:
+            del settings[key]
+    for key, value in values.items():
+        current = settings.get(key)
+        if isinstance(current, list) and isinstance(value, list):
+            current[:] = value
+        else:
+            settings[key] = value
 
 
 def _backup_corrupt_settings(path: str) -> Optional[str]:
@@ -169,7 +229,7 @@ def _coerce_settings(merged: Dict) -> Dict:
             C.MIN_TREATMENT_MINUTES,
             min(C.MAX_TREATMENT_MINUTES, int(minutes)),
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         merged["treatment_minutes"] = defaults["treatment_minutes"]
 
     # 진단명: {code, name, favorite} 딕셔너리 리스트
@@ -228,24 +288,24 @@ def load_settings() -> Dict:
     global _last_load_warning
     _last_load_warning = ""
     path = settings_file()
+    with _settings_lock(path):
+        return _load_settings_locked(path)
+
+
+def _load_settings_locked(path: str) -> Dict:
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        with open(path, "rb") as f:
+            content = f.read()
+        data = json.loads(content.decode("utf-8"))
         if isinstance(data, dict):
-            settings = merge_with_defaults(data)
-            _track_settings_file(settings, path)
-            return settings
+            return _Settings(merge_with_defaults(data), hashlib.sha256(content).hexdigest())
         _mark_settings_corrupt(path)
-        settings = default_settings()
-        _track_settings_file(settings, path)
-        return settings
+        return _Settings(default_settings(), _file_revision(path))
     except ValueError:
         if os.path.exists(path):
             _mark_settings_corrupt(path)
-            settings = default_settings()
-            _track_settings_file(settings, path)
-            return settings
-    except OSError:
+            return _Settings(default_settings(), _file_revision(path))
+    except FileNotFoundError:
         pass
 
     # 신규 파일이 없으면 구버전 설정(치료사 목록)을 이어받는다.
@@ -259,11 +319,10 @@ def load_settings() -> Dict:
                 settings["therapists"] = [str(t) for t in old["therapists"]]
         except (OSError, ValueError):
             pass
-    _track_settings_file(settings, path)
-    return settings
+    return _Settings(settings, _file_revision(path))
 
 
-def save_settings(settings: Dict) -> bool:
+def save_settings(settings: Dict, replacement: Optional[Dict] = None) -> bool:
     """설정을 저장한다. 임시 파일에 쓴 뒤 교체하여 파일 손상을 방지한다.
 
     저장 직전에 타입과 범위를 한 번 더 검증하고, 호출자가 들고 있는
@@ -272,25 +331,44 @@ def save_settings(settings: Dict) -> bool:
     """
     global _last_save_error
     _last_save_error = ""
-    path = settings_file()
-    tmp = path + ".tmp"
+    tmp = None
     try:
-        expected_mtime = _settings_mtimes.get(id(settings), _UNTRACKED)
-        current_mtime = _file_mtime(path)
-        if expected_mtime is not _UNTRACKED and expected_mtime != current_mtime:
-            _last_save_error = "conflict"
-            return False
-        cleaned = merge_with_defaults(settings)
-        settings.clear()
-        settings.update(cleaned)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-        _track_settings_file(settings, path)
+        path = settings_file()
+        with _settings_lock(path):
+            if isinstance(settings, _Settings) and settings.revision != _file_revision(path):
+                _last_save_error = "conflict"
+                return False
+            cleaned = merge_with_defaults(settings if replacement is None else replacement)
+            content = json.dumps(cleaned, ensure_ascii=False, indent=2).encode("utf-8")
+            with tempfile.NamedTemporaryFile(mode="wb", dir=os.path.dirname(path),
+                                             prefix="settings-", suffix=".tmp", delete=False) as f:
+                tmp = f.name
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            tmp = None
+            _apply_settings(settings, cleaned)
+            if isinstance(settings, _Settings):
+                settings.revision = hashlib.sha256(content).hexdigest()
         return True
     except OSError:
         _last_save_error = "io"
         return False
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def reload_settings(settings: Dict) -> None:
+    """디스크의 최신 설정으로 바꾸고 다음 저장의 기준도 갱신한다."""
+    latest = load_settings()
+    _apply_settings(settings, latest)
+    if isinstance(settings, _Settings):
+        settings.revision = latest.revision
 
 
 # ---------------------------------------------------------------------------

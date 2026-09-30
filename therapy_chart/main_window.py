@@ -34,7 +34,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{C.APP_NAME} v{C.APP_VERSION}")
-        self.minsize(1040, 680)
+        self.minsize(min(900, self.winfo_screenwidth()), min(560, self.winfo_screenheight()))
         self._set_window_icon()
 
         T.configure_styles(self)
@@ -403,13 +403,13 @@ class App(tk.Tk):
         if len(therapists) == 1:
             self.therapist_var.set(therapists[0])
 
-    def save_settings(self) -> bool:
+    def save_settings(self, replacement: Optional[Dict] = None) -> bool:
         """설정을 저장하고 성공 여부를 반환한다. 실패 시 상태 메시지 표시."""
-        ok = storage.save_settings(self.settings)
+        ok = storage.save_settings(self.settings, replacement=replacement)
         if not ok:
             if storage.get_last_save_error() == "conflict":
                 self.show_status(
-                    "⚠ 다른 창에서 설정이 변경되어 저장하지 않았습니다. 설정을 다시 확인해주세요.",
+                    "⚠ 다른 창에서 설정이 변경되었습니다. 설정 > 데이터에서 최신 설정을 다시 불러오세요.",
                     MISSING_COLOR,
                     sticky=True,
                 )
@@ -425,9 +425,9 @@ class App(tk.Tk):
             parent=self,
         )
 
-    def on_settings_changed(self) -> bool:
+    def on_settings_changed(self, replacement: Optional[Dict] = None) -> bool:
         """설정 다이얼로그에서 변경이 있을 때마다 호출. 저장 성공 여부 반환."""
-        ok = self.save_settings()
+        ok = self.save_settings(replacement=replacement)
         self.refresh_from_settings()
         return ok
 
@@ -682,7 +682,6 @@ class App(tk.Tk):
                     )
                     return
                 text = rec.build_text()
-                self._remember_recents(rec)
             else:
                 text = self.output.get("1.0", "end-1c")
                 if not text.strip():
@@ -714,16 +713,22 @@ class App(tk.Tk):
             self.clipboard_clear()
             self.clipboard_append(text)
             self.update()  # 클립보드 내용 유지
+            saved = self._remember_recents(rec) if self.preview_mode == "auto" else True
             self._update_completion([])
             if self.preview_mode == "auto" and self.settings.get("auto_reset_after_copy"):
                 self.reset_inputs(confirm=False)
                 self.show_status("✔ 복사 완료 — 다음 환자 입력 준비됨", OK_COLOR)
             else:
                 self.show_status("✔ 진료기록이 클립보드에 복사되었습니다.", OK_COLOR)
+            if not saved:
+                self.show_status(
+                    "✔ 복사 완료. 최근 목록은 저장하지 못했습니다. 설정 > 데이터에서 저장 상태를 확인해주세요.",
+                    T.WARNING, sticky=True,
+                )
         except Exception:
             self.show_status("⚠ 복사 중 문제가 발생했습니다. 다시 시도해주세요.", MISSING_COLOR)
 
-    def _remember_recents(self, rec: R.TherapyRecord) -> None:
+    def _remember_recents(self, rec: R.TherapyRecord) -> bool:
         """복사 성공 시 최근 사용 진단명/시행 부위를 저장한다."""
         code = R.normalize_code(rec.diagnosis_code)
         name = rec.diagnosis_name.strip()
@@ -736,8 +741,9 @@ class App(tk.Tk):
             self.settings["recent_regions"] = storage.push_recent(
                 self.settings["recent_regions"], region
             )
-        self.save_settings()
+        saved = self.save_settings()
         self.refresh_from_settings()
+        return saved
 
     def reset_inputs(self, confirm: bool = True) -> None:
         """현재 환자 입력만 초기화한다. 치료사/설정/저장 목록은 유지."""
@@ -796,24 +802,45 @@ class App(tk.Tk):
     # 종료 처리
     # ==================================================================
     def _restore_geometry(self) -> None:
+        """저장된 창이 화면 밖에 있으면 크기와 위치를 보정한다."""
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        width, height = min(1440, max(1, sw - 80)), min(880, max(1, sh - 120))
+        self.minsize(min(900, width), min(560, height))
         geometry = self.settings.get("window_geometry", "")
         if self.settings.get("remember_geometry", True) and geometry:
-            try:
-                self.geometry(geometry)
+            clamped = self._clamp_geometry(geometry, sw, sh)
+            if clamped:
+                self.geometry(clamped)
                 return
-            except tk.TclError:
-                pass
-        try:
-            self.state("zoomed")  # Windows: 최대화로 시작
-        except tk.TclError:
-            self.geometry("1280x800")
+        x, y = max(0, (sw - width) // 2), max(0, (sh - height) // 2 - 20)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
+    @staticmethod
+    def _clamp_geometry(geometry: str, sw: int, sh: int) -> Optional[str]:
+        import re
+
+        match = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", geometry.strip())
+        if not match:
+            return None
+        width, height, x, y = (int(v) for v in match.groups())
+        width = max(min(900, max(1, sw - 80)), min(width, max(1, sw - 40)))
+        height = max(min(560, max(1, sh - 120)), min(height, max(1, sh - 80)))
+        if x < 0 or x + width > sw:
+            x = max(0, (sw - width) // 2)
+        if y < 0 or y + height > sh - 40:
+            y = max(0, (sh - height) // 2 - 20)
+        return f"{width}x{height}+{x}+{y}"
 
     def on_close(self) -> None:
         try:
             if self.settings.get("remember_geometry", True) and self.state() == "normal":
                 self.settings["window_geometry"] = self.geometry()
             self.settings["last_therapist"] = self.therapist_var.get()
-            storage.save_settings(self.settings)
+            if not self.save_settings() and not messagebox.askyesno(
+                "설정 저장 실패", "설정 변경을 저장하지 못했습니다.\n저장하지 않고 종료할까요?", parent=self,
+            ):
+                return
         except Exception:
-            pass
+            self.show_status("⚠ 설정을 저장할 수 없습니다. 설정 상태를 확인해주세요.", MISSING_COLOR, sticky=True)
+            return
         self.destroy()
