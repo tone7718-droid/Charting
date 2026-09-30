@@ -16,7 +16,7 @@ concurrency:
 # 이 브랜치에 대한 push만 사용자용 latest 릴리스로 배포한다.
 # (다른 실험 브랜치를 push해도 사용자 다운로드본이 바뀌지 않도록)
 env:
-  DEPLOY_BRANCH: refs/heads/claude/therapy-record-form-exe-9d8xfm
+  DEPLOY_BRANCH: refs/heads/main
 
 jobs:
   build:
@@ -71,7 +71,7 @@ jobs:
 
       # 배포 브랜치에 대한 push일 때만 로그인 없이 받는 latest 릴리스를 갱신
       - name: Publish latest release
-        if: github.ref == env.DEPLOY_BRANCH
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
