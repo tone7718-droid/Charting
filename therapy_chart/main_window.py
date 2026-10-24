@@ -128,33 +128,48 @@ class App(tk.Tk):
             pady=8,
         )
 
-        paned = ttk.PanedWindow(self, orient="horizontal")
-        paned.pack(fill="both", expand=True)
+        # 배너는 이 분할 창 위에 표시된다 (refresh_from_settings).
+        self.main_paned = ttk.PanedWindow(self, orient="horizontal")
+        self.main_paned.pack(fill="both", expand=True)
 
-        left_scroll = ScrollableFrame(paned)
-        right = ttk.Frame(paned, style="App.TFrame")
-        paned.add(left_scroll, weight=1)
-        paned.add(right, weight=1)
+        left_scroll = ScrollableFrame(self.main_paned)
+        right = ttk.Frame(self.main_paned, style="App.TFrame")
+        self.main_paned.add(left_scroll, weight=1)
+        self.main_paned.add(right, weight=1)
         left = left_scroll.inner
-
-        count_validate = self._range_validate(C.MIN_TREATMENT_COUNT, C.MAX_TREATMENT_COUNT)
-        vas_validate = self._range_validate(C.MIN_VAS, C.MAX_VAS)
 
         # 필수 항목 강조를 위한 섹션 제목 라벨 저장소: 라벨명 → 위젯
         self._field_titles: Dict[str, tk.Widget] = {}
 
-        def section(parent, title: str, field_label: Optional[str] = None) -> ttk.Frame:
-            """제목 라벨을 따로 가진 LabelFrame 생성 (누락 강조용)."""
-            lbl = ttk.Label(parent, text=title, font=TITLE_FONT, foreground=T.ACCENT, style="Title.TLabel")
-            frame = ttk.LabelFrame(parent, labelwidget=lbl, padding=12, style="Card.TLabelframe")
-            frame.pack(fill="x", pady=(0, 12))
-            if field_label:
-                self._field_titles[field_label] = lbl
-                lbl._normal_text = title  # type: ignore[attr-defined]
-            return frame
+        self._build_diagnosis_section(left)
+        self._build_purpose_section(left)
+        self._build_therapist_section(left)
+        self._build_date_section(left)
+        self._build_treatment_info_section(left)
+        self._build_technique_section(left)
+        self._build_evaluation_section(left)
 
+        # -------- 오른쪽: 미리보기 패널 --------
+        self.preview_panel = PreviewPanel(right, self)
+        self.preview_panel.pack(fill="both", expand=True)
+
+    def _register_field_title(self, field_label: str, lbl: tk.Widget, text: str) -> None:
+        """누락 강조 대상 라벨 등록. 강조 해제 시 text로 되돌린다."""
+        self._field_titles[field_label] = lbl
+        lbl._normal_text = text  # type: ignore[attr-defined]
+
+    def _create_section(self, parent, title: str, field_label: Optional[str] = None) -> ttk.Frame:
+        """제목 라벨을 따로 가진 LabelFrame 생성 (누락 강조용)."""
+        lbl = ttk.Label(parent, text=title, font=TITLE_FONT, foreground=T.ACCENT, style="Title.TLabel")
+        frame = ttk.LabelFrame(parent, labelwidget=lbl, padding=12, style="Card.TLabelframe")
+        frame.pack(fill="x", pady=(0, 12))
+        if field_label:
+            self._register_field_title(field_label, lbl, title)
+        return frame
+
+    def _build_diagnosis_section(self, parent) -> None:
         # ① 진단명 ------------------------------------------------------
-        f_diag = section(left, "① 진단명", C.LABEL_DIAGNOSIS)
+        f_diag = self._create_section(parent, "① 진단명", C.LABEL_DIAGNOSIS)
         code_row = ttk.Frame(f_diag, style="Card.TFrame")
         code_row.pack(fill="x")
         ttk.Label(code_row, text="진단코드:", style="Card.TLabel").pack(side="left")
@@ -207,16 +222,18 @@ class App(tk.Tk):
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(5, 0))
 
+    def _build_purpose_section(self, parent) -> None:
         # ② 치료목적 ----------------------------------------------------
-        f_purpose = section(left, "② 치료목적", C.LABEL_PURPOSE)
+        f_purpose = self._create_section(parent, "② 치료목적", C.LABEL_PURPOSE)
         ttk.Label(f_purpose, text="해당 환자의 치료 목표를 클릭한 순서대로 선택합니다.", style="Muted.TLabel").pack(anchor="w", pady=(0, 4))
         self.purpose_chips = ChipGroup(
             f_purpose, self.settings["purposes"], per_row=2, on_change=self.update_preview
         )
         self.purpose_chips.pack(fill="x")
 
+    def _build_therapist_section(self, parent) -> None:
         # ③ 시행자 ------------------------------------------------------
-        f_ther = section(left, "③ 시행자", C.LABEL_THERAPIST)
+        f_ther = self._create_section(parent, "③ 시행자", C.LABEL_THERAPIST)
         row = ttk.Frame(f_ther, style="Card.TFrame")
         row.pack(fill="x")
         ttk.Label(row, text="치료사 선택:", style="Card.TLabel").pack(side="left")
@@ -231,19 +248,20 @@ class App(tk.Tk):
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(5, 0))
 
+    def _build_date_section(self, parent) -> None:
         # ④ 시행일시 ----------------------------------------------------
-        f_date = section(left, "④ 시행일시", C.LABEL_DATE)
+        f_date = self._create_section(parent, "④ 시행일시", C.LABEL_DATE)
         self.calendar = CalendarWidget(f_date, on_select=self.on_date_selected)
         self.calendar.pack()
 
+    def _build_treatment_info_section(self, parent) -> None:
         # ⑤ 시행횟수 / 시행부위 / 치료시간 ------------------------------
-        f_misc = section(left, "⑤ 치료 기본 정보")
+        f_misc = self._create_section(parent, "⑤ 치료 기본 정보")
         row1 = ttk.Frame(f_misc, style="Card.TFrame")
         row1.pack(fill="x", pady=3)
         lbl_count = ttk.Label(row1, text="시행횟수:", width=10, style="Card.TLabel")
         lbl_count.pack(side="left")
-        self._field_titles[C.LABEL_COUNT] = lbl_count
-        lbl_count._normal_text = "시행횟수:"  # type: ignore[attr-defined]
+        self._register_field_title(C.LABEL_COUNT, lbl_count, "시행횟수:")
         ttk.Spinbox(
             row1,
             from_=C.MIN_TREATMENT_COUNT,
@@ -252,7 +270,7 @@ class App(tk.Tk):
             width=6,
             justify="center",
             validate="key",
-            validatecommand=count_validate,
+            validatecommand=self._range_validate(C.MIN_TREATMENT_COUNT, C.MAX_TREATMENT_COUNT),
             font=BASE_FONT,
         ).pack(side="left")
         ttk.Label(
@@ -265,8 +283,7 @@ class App(tk.Tk):
         row2.pack(fill="x", pady=3)
         lbl_region = ttk.Label(row2, text="시행부위:", width=10, style="Card.TLabel")
         lbl_region.pack(side="left")
-        self._field_titles[C.LABEL_REGION] = lbl_region
-        lbl_region._normal_text = "시행부위:"  # type: ignore[attr-defined]
+        self._register_field_title(C.LABEL_REGION, lbl_region, "시행부위:")
         self.region_combo = ttk.Combobox(row2, textvariable=self.region_var, font=BASE_FONT)
         self.region_combo.pack(side="left", fill="x", expand=True)
         self.region_fav_btn = ttk.Button(row2, text="☆ 즐겨찾기", width=10, command=self.toggle_region_favorite)
@@ -284,15 +301,17 @@ class App(tk.Tk):
             style="Card.TLabel",
         ).pack(side="left", padx=(6, 0))
 
+    def _build_technique_section(self, parent) -> None:
         # ⑥ 시행기법 ----------------------------------------------------
-        f_tech = section(left, "⑥ 시행기법", C.LABEL_TECHNIQUE)
+        f_tech = self._create_section(parent, "⑥ 시행기법", C.LABEL_TECHNIQUE)
         self.tech_chips = ChipGroup(
             f_tech, self.settings["techniques"], per_row=2, on_change=self.update_preview
         )
         self.tech_chips.pack(fill="x")
 
+    def _build_evaluation_section(self, parent) -> None:
         # ⑦ 치료 효과 평가 (선택 입력) ----------------------------------
-        f_eval = section(left, "⑦ 치료 효과 평가")
+        f_eval = self._create_section(parent, "⑦ 치료 효과 평가")
         ttk.Label(f_eval, text="선택 입력입니다. 입력한 경우에만 진료 기록에 표시됩니다.", style="Muted.TLabel").pack(anchor="w", pady=(0, 4))
         imp_row = ttk.Frame(f_eval, style="Card.TFrame")
         imp_row.pack(fill="x", pady=3)
@@ -302,6 +321,7 @@ class App(tk.Tk):
         )
         self.improvement_chips.pack(side="left")
 
+        vas_validate = self._range_validate(C.MIN_VAS, C.MAX_VAS)
         vas_row = ttk.Frame(f_eval, style="Card.TFrame")
         vas_row.pack(fill="x", pady=3)
         ttk.Label(vas_row, text="VAS:", width=12, style="Card.TLabel").pack(side="left")
@@ -340,10 +360,6 @@ class App(tk.Tk):
         ttk.Label(f_eval, text="예: ROM 개선, 치료 전후 통증 유발 동작 감소", style="Muted.TLabel").pack(
             anchor="w", pady=(4, 0)
         )
-
-        # -------- 오른쪽: 미리보기 패널 --------
-        self.preview_panel = PreviewPanel(right, self)
-        self.preview_panel.pack(fill="both", expand=True)
 
     def _bind_shortcuts(self) -> None:
         self.bind_all("<Control-Shift-C>", lambda _e: self.copy_output())
@@ -389,7 +405,7 @@ class App(tk.Tk):
         if therapists:
             self.banner.pack_forget()
         else:
-            self.banner.pack(fill="x", before=self.winfo_children()[1] if len(self.winfo_children()) > 1 else None)
+            self.banner.pack(fill="x", before=self.main_paned)
 
         self.update_preview()
 
