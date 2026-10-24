@@ -60,19 +60,25 @@ jobs:
       - name: Build installer
         run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=${{ steps.appver.outputs.version }} installer\TherapyChart.iss'
 
-      - name: Verify release tag matches this source
+      # 버전 태그가 이미 다른 커밋에 있으면 기존 Release를 덮어쓰지 않고 게시만 건너뛴다.
+      # (APP_VERSION을 올리지 않은 리팩터링·테스트 커밋도 빌드 검증은 통과로 표시)
+      - name: Check release tag for this source
+        id: release_tag
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         shell: pwsh
         run: |
           $tag = "v${{ steps.appver.outputs.version }}"
           $refs = @(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")
           if ($LASTEXITCODE -ne 0) { throw "Cannot check release tag" }
+          $publish = "true"
           if ($refs.Count -gt 0) {
             $tagCommit = ($refs[-1] -split '\s+')[0]
             if ($tagCommit -ne "${{ github.sha }}") {
-              throw "Release $tag already belongs to another commit. Bump APP_VERSION before publishing."
+              $publish = "false"
+              echo "::warning::Release $tag already belongs to another commit. Skipping publish; bump APP_VERSION to release."
             }
           }
+          echo "publish=$publish" >> $env:GITHUB_OUTPUT
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
@@ -82,7 +88,7 @@ jobs:
 
       # main의 빌드만 버전 태그로 배포하며, 게시 실패도 실행 실패로 표시한다.
       - name: Publish versioned release
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.release_tag.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.appver.outputs.version }}

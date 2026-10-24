@@ -176,5 +176,5 @@ installer/TherapyChart.iss    Inno Setup 설치 프로그램 스크립트
 릴리스는 main 빌드를 `v2.1.3` 같은 버전 태그로 게시하고 소스 커밋을 함께 기록합니다.
 실험 브랜치 빌드는 Actions의 Artifacts에서만 받습니다. 릴리스 게시 실패도 Actions에서 실패로 표시됩니다.
 새 버전을 main에 반영할 때는 `constants.APP_VERSION`과 CHANGELOG를 함께 갱신하세요.
-이미 다른 커밋에 연결된 버전 태그로는 새 빌드를 게시하지 않습니다.
+이미 다른 커밋에 연결된 버전 태그로는 새 빌드를 게시하지 않습니다. 이때 빌드와 테스트는 그대로 검증하고, 게시만 건너뛰었다는 경고를 Actions에 남깁니다.
 아이콘을 다시 생성할 때만 별도로 Pillow가 필요합니다 (`pip install Pillow`).
