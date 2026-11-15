@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """기록 복사와 종료 시 저장 실패를 검증한다."""
 
+import datetime
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -10,6 +11,12 @@ from tests.test_record import sample_record
 
 
 class TestCopyAndClose(unittest.TestCase):
+    def setUp(self):
+        # 복사 실패를 다루는 테스트가 실제 사용자 폴더에 error.log를 남기지 않게 한다.
+        log = patch("therapy_chart.main_window._log_current_exception")
+        self.log_exception = log.start()
+        self.addCleanup(log.stop)
+
     def test_one_sided_vas_copy_requires_confirmation(self):
         for before, after in (("6", ""), ("", "0")):
             for confirmed in (False, True):
@@ -49,6 +56,7 @@ class TestCopyAndClose(unittest.TestCase):
         return SimpleNamespace(
             preview_mode="auto", settings={"auto_reset_after_copy": False},
             current_record=sample_record, _update_completion=Mock(), _mark_missing=Mock(),
+            _sync_today=Mock(return_value=False), _edit_base_text=None, date_selected=datetime.date(2026, 7, 3),
             clipboard_clear=Mock(), clipboard_append=Mock(), update=Mock(),
             _remember_recents=Mock(return_value=True), show_status=Mock(), reset_inputs=Mock(),
         )
@@ -58,6 +66,77 @@ class TestCopyAndClose(unittest.TestCase):
         app.clipboard_append.side_effect = RuntimeError("clipboard unavailable")
         App.copy_output(app)
         app._remember_recents.assert_not_called()
+        self.log_exception.assert_called_once()
+
+    def make_manual_app(self, text=None):
+        app = self.make_app()
+        app.preview_mode = "manual"
+        app.output = Mock()
+        app.output.get.return_value = sample_record().build_text() if text is None else text
+        return app
+
+    def test_manual_copy_asks_when_left_inputs_changed_after_editing(self):
+        for confirmed in (False, True):
+            with self.subTest(confirmed=confirmed):
+                app = self.make_manual_app()
+                app._edit_base_text = sample_record(region="어깨").build_text()  # 편집 시작 때는 '어깨'였다
+                with patch("therapy_chart.main_window.messagebox.askyesno", return_value=confirmed) as confirm:
+                    App.copy_output(app)
+                confirm.assert_called_once()
+                self.assertEqual(app.clipboard_append.called, confirmed)
+
+    def test_manual_copy_does_not_ask_when_left_inputs_are_unchanged(self):
+        app = self.make_manual_app()
+        app._edit_base_text = sample_record().build_text()
+        with patch("therapy_chart.main_window.messagebox.askyesno") as confirm:
+            App.copy_output(app)
+        confirm.assert_not_called()
+        app.clipboard_append.assert_called_once()
+
+    def test_auto_reset_also_applies_after_manual_copy(self):
+        app = self.make_manual_app()
+        app.settings["auto_reset_after_copy"] = True
+        App.copy_output(app)
+        app.clipboard_append.assert_called_once()
+        app.reset_inputs.assert_called_once_with(confirm=False)
+
+    def test_future_date_requires_confirmation(self):
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        for confirmed in (False, True):
+            with self.subTest(confirmed=confirmed):
+                app = self.make_app()
+                app.current_record = lambda: sample_record(date=tomorrow)
+                with patch("therapy_chart.main_window.messagebox.askyesno", return_value=confirmed) as confirm:
+                    App.copy_output(app)
+                confirm.assert_called_once()
+                self.assertEqual(app.clipboard_append.called, confirmed)
+
+    def test_today_and_past_dates_copy_without_date_confirmation(self):
+        for date in (datetime.date.today(), datetime.date(2026, 7, 3)):
+            app = self.make_app()
+            app.current_record = lambda date=date: sample_record(date=date)
+            with patch("therapy_chart.main_window.messagebox.askyesno") as confirm:
+                App.copy_output(app)
+            confirm.assert_not_called()
+            app.clipboard_append.assert_called_once()
+
+    def test_copy_stops_when_date_rolled_over_to_new_day(self):
+        app = self.make_app()
+        app._sync_today.return_value = True
+        App.copy_output(app)
+        app.clipboard_append.assert_not_called()
+        self.assertIn("다시 복사", app.show_status.call_args.args[0])
+
+    def test_close_remembers_maximized_state_without_overwriting_normal_geometry(self):
+        for state, maximized in (("zoomed", True), ("normal", False)):
+            with self.subTest(state=state):
+                app = SimpleNamespace(settings={"window_geometry": "1000x700+10+10"}, state=Mock(return_value=state),
+                                      geometry=Mock(return_value="1200x800+0+0"), therapist_var=Mock(),
+                                      save_settings=Mock(return_value=True), destroy=Mock(), show_status=Mock())
+                App.on_close(app)
+                self.assertEqual(app.settings["window_maximized"], maximized)
+                self.assertEqual(app.settings["window_geometry"],
+                                 "1000x700+10+10" if maximized else "1200x800+0+0")
 
     def test_copy_retains_save_failure_warning_even_with_auto_reset(self):
         app = self.make_app()

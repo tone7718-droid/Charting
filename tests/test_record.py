@@ -222,7 +222,36 @@ class TestMissingLabelsInText(unittest.TestCase):
         self.assertIn("시행기법", R.missing_labels_in_text(text))
 
 
+class TestCleanOutput(unittest.TestCase):
+    def test_pasted_line_breaks_and_tabs_do_not_split_lines(self):
+        rec = sample_record(diagnosis_name="회전근개\n증후군\t", therapist=" 홍길동\n", region="허리\r\n  골반 ",
+                            purposes=["통증\n감소", " "], eval_note="ROM\n개선")
+        lines = rec.build_lines()
+        self.assertEqual(len(lines), 9)
+        self.assertEqual(lines[0], "진단명 : M751 회전근개 증후군")
+        self.assertEqual(lines[1], "치료목적 : 통증 감소")
+        self.assertEqual(lines[2], "시행자 : 홍길동 물리치료사")
+        self.assertEqual(lines[5], "시행부위 : 허리 골반")
+        self.assertEqual(lines[7], "치료 효과 평가 : ROM 개선")
+        self.assertTrue(all("\n" not in line and "\t" not in line for line in lines))
+
+    def test_leading_zeros_are_removed_from_count_and_vas(self):
+        rec = sample_record(count="007", vas_before="06", vas_after="00")
+        text = rec.build_text()
+        self.assertIn("시행횟수 : 7회차", text)
+        self.assertIn("VAS 6→0", text)
+        self.assertEqual(rec.missing_fields(), [])
+
+    def test_empty_count_stays_empty(self):
+        self.assertIn("시행횟수 : \n", sample_record(count=" ").build_text())
+
+
 class TestInvalidValuesInText(unittest.TestCase):
+    def test_manual_vas_mention_without_numbers_is_allowed(self):
+        for value in ("VAS 6→3, 야간통 VAS 변화 없음", "VAS 측정 거부", "주관적 호전도 유지, VAS 동일"):
+            with self.subTest(value=value):
+                self.assertEqual(R.invalid_values_in_text("치료 효과 평가 : " + value), [])
+
     def test_manual_vas_rejects_entire_malformed_value(self):
         for value in ("VAS -1→3", "VAS 6→-1", "VAS 6→3.5", "VAS 99->3",
                       "VAS 6→", "VAS ²→3", "VAS 6→3 trailing"):

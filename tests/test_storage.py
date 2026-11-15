@@ -253,7 +253,78 @@ class TestPushRecent(StorageTestCase):
         self.assertEqual(result[0], 99)
 
 
+class TestHandEditedSettings(StorageTestCase):
+    """메모장으로 고친 설정 파일이나 오래된 백업을 읽어도 데이터를 잃지 않아야 한다."""
+
+    def test_settings_saved_with_bom_are_not_treated_as_corrupt(self):
+        settings = storage.default_settings()
+        settings["therapists"] = ["홍길동"]
+        with open(storage.settings_file(), "w", encoding="utf-8-sig") as f:  # 메모장 'UTF-8(BOM)' 저장
+            json.dump(settings, f, ensure_ascii=False)
+        loaded = storage.load_settings()
+        self.assertEqual(loaded["therapists"], ["홍길동"])
+        self.assertEqual(storage.get_last_load_warning(), "")
+        self.assertFalse([name for name in os.listdir(self.tmp.name + "/TherapyChart") if "corrupt" in name])
+        loaded["therapists"].append("김철수")
+        self.assertTrue(storage.save_settings(loaded))
+        self.assertEqual(storage.load_settings()["therapists"], ["홍길동", "김철수"])
+
+    def test_backup_saved_with_bom_can_be_restored(self):
+        path = os.path.join(self.tmp.name, "backup.json")
+        with open(path, "w", encoding="utf-8-sig") as f:
+            json.dump({"therapists": ["홍길동"]}, f, ensure_ascii=False)
+        self.assertEqual(storage.restore_from(path)["therapists"], ["홍길동"])
+
+    def test_lists_are_trimmed_and_deduplicated(self):
+        merged = storage.merge_with_defaults({
+            "therapists": [" 홍길동 ", "홍길동", "", "  ", True, "김\n철수"],
+            "purposes": ["통증 감소", "통증 감소 "],
+            "recent_regions": [f"부위{i}" for i in range(40)],
+        })
+        self.assertEqual(merged["therapists"], ["홍길동", "김 철수"])
+        self.assertEqual(merged["purposes"], ["통증 감소"])
+        self.assertEqual(len(merged["recent_regions"]), storage.C.RECENT_LIMIT)
+
+    def test_default_and_last_therapist_must_be_registered(self):
+        merged = storage.merge_with_defaults({
+            "therapists": ["홍길동"], "default_therapist": "퇴사자", "last_therapist": "홍길동",
+        })
+        self.assertEqual(merged["default_therapist"], "")
+        self.assertEqual(merged["last_therapist"], "홍길동")
+
+    def test_blank_diagnoses_are_dropped_and_names_trimmed(self):
+        merged = storage.merge_with_defaults({
+            "diagnoses": [{"code": "", "name": "  "}, {"code": "m54.5", "name": " 요통 "}],
+            "recent_diagnoses": [{"code": "", "name": ""}, {"code": "M545", "name": "요통"}],
+        })
+        self.assertEqual(merged["diagnoses"], [{"code": "M545", "name": "요통", "favorite": False}])
+        self.assertEqual(merged["recent_diagnoses"], [{"code": "M545", "name": "요통"}])
+
+    def test_window_maximized_defaults_to_false_and_rejects_wrong_type(self):
+        self.assertIs(storage.load_settings()["window_maximized"], False)
+        self.assertIs(storage.merge_with_defaults({"window_maximized": "yes"})["window_maximized"], False)
+        self.assertIs(storage.merge_with_defaults({"window_maximized": True})["window_maximized"], True)
+
+
+class TestDiagnosisSearch(unittest.TestCase):
+    def test_matches_code_with_or_without_dot_and_name(self):
+        diagnosis = {"code": "M751", "name": "회전근개증후군"}
+        for query in ("m751", "M75.1", "m75", "회전근", "M751 회전", "  "):
+            with self.subTest(query=query):
+                self.assertTrue(storage.diagnosis_matches(diagnosis, query))
+        for query in ("M545", "요통", "7.5.2"):
+            with self.subTest(query=query):
+                self.assertFalse(storage.diagnosis_matches(diagnosis, query))
+
+
 class TestDiagnosesCsv(StorageTestCase):
+    def test_single_column_rows_are_read_as_name_unless_they_look_like_codes(self):
+        path = self._write_csv("회전근개증후군\ntennis elbow\nm75.1\n,요통\n")
+        items, skipped = storage.import_diagnoses_csv(path)
+        self.assertEqual(skipped, 0)
+        self.assertEqual([(d["code"], d["name"]) for d in items],
+                         [("", "회전근개증후군"), ("", "tennis elbow"), ("M751", ""), ("", "요통")])
+
     def _write_csv(self, content: str, encoding: str = "utf-8") -> str:
         path = os.path.join(self.tmp.name, "diag.csv")
         with open(path, "w", encoding=encoding, newline="") as f:

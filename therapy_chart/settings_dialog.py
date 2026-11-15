@@ -39,7 +39,10 @@ class ListEditor(ttk.Frame):
 
         list_row = ttk.Frame(self)
         list_row.pack(fill="both", expand=True)
-        self.listbox = tk.Listbox(list_row, height=height, font=BASE_FONT, activestyle="none")
+        # exportselection=False: 입력란에서 글자를 선택해도 목록 선택이 풀리지 않는다.
+        self.listbox = tk.Listbox(
+            list_row, height=height, font=BASE_FONT, activestyle="none", exportselection=False
+        )
         sb = ttk.Scrollbar(list_row, orient="vertical", command=self.listbox.yview)
         self.listbox.configure(yscrollcommand=sb.set)
         self.listbox.pack(side="left", fill="both", expand=True)
@@ -100,8 +103,10 @@ class ListEditor(ttk.Frame):
             return
         old = self.items[idx]
         self.items[idx] = value
-        self._changed()
+        # 저장보다 먼저 호출한다. 저장 때 목록에 없는 기본 치료사는 비워지므로,
+        # 기본·마지막 치료사 이름을 새 이름으로 먼저 옮겨야 한다.
         self.on_rename(old, value)
+        self._changed()
 
     def delete(self) -> None:
         idx = self.selected_index()
@@ -252,7 +257,9 @@ class SettingsDialog(tk.Toplevel):
 
         list_row = ttk.Frame(tab)
         list_row.pack(fill="both", expand=True, pady=(6, 0))
-        self.diag_listbox = tk.Listbox(list_row, height=9, font=BASE_FONT, activestyle="none")
+        self.diag_listbox = tk.Listbox(
+            list_row, height=9, font=BASE_FONT, activestyle="none", exportselection=False
+        )
         sb = ttk.Scrollbar(list_row, orient="vertical", command=self.diag_listbox.yview)
         self.diag_listbox.configure(yscrollcommand=sb.set)
         self.diag_listbox.pack(side="left", fill="both", expand=True)
@@ -305,21 +312,28 @@ class SettingsDialog(tk.Toplevel):
 
     def refresh_diag_list(self) -> None:
         query = self.diag_search_var.get().strip().lower()
+        # 수정·즐겨찾기 후에도 같은 진단명이 선택된 채로 남도록 기억해 둔다.
+        selected = self._selected_diag()
+        selected_key = (selected.get("code"), selected.get("name")) if selected else None
         self.diag_listbox.delete(0, "end")
         self._diag_view = []
         diagnoses = self.settings["diagnoses"]
         ordered = [d for d in diagnoses if d.get("favorite")] + [d for d in diagnoses if not d.get("favorite")]
         for d in ordered:
             text = f"{d.get('code', '')} {d.get('name', '')}".strip()
-            if query and query not in text.lower():
+            if query and not storage.diagnosis_matches(d, query):
                 continue
             star = "★ " if d.get("favorite") else "    "
             self.diag_listbox.insert("end", star + text)
             self._diag_view.append(d)
+            if (d.get("code"), d.get("name")) == selected_key:
+                index = len(self._diag_view) - 1
+                self.diag_listbox.selection_set(index)
+                self.diag_listbox.see(index)
 
     def _selected_diag(self) -> Optional[Dict]:
         sel = self.diag_listbox.curselection()
-        return self._diag_view[sel[0]] if sel else None
+        return self._diag_view[sel[0]] if sel and sel[0] < len(self._diag_view) else None
 
     def _on_diag_select(self, _e=None) -> None:
         d = self._selected_diag()
@@ -456,7 +470,9 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(tab, text="최근 사용한 시행 부위 (복사할 때 자동 저장)").pack(anchor="w")
         recent_row = ttk.Frame(tab)
         recent_row.pack(fill="both", expand=True, pady=(4, 0))
-        self.recent_region_listbox = tk.Listbox(recent_row, height=5, font=BASE_FONT, activestyle="none")
+        self.recent_region_listbox = tk.Listbox(
+            recent_row, height=5, font=BASE_FONT, activestyle="none", exportselection=False
+        )
         sb = ttk.Scrollbar(recent_row, orient="vertical", command=self.recent_region_listbox.yview)
         self.recent_region_listbox.configure(yscrollcommand=sb.set)
         self.recent_region_listbox.pack(side="left", fill="both", expand=True)
@@ -578,7 +594,7 @@ class SettingsDialog(tk.Toplevel):
             self.changed()
 
     def open_data_folder(self) -> None:
-        path = storage.data_dir()
+        path = os.path.abspath(storage.data_dir())
         try:
             if sys.platform.startswith("win"):
                 os.startfile(path)  # noqa: S606 (Windows 탐색기 열기)

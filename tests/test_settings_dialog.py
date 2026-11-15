@@ -71,7 +71,8 @@ class TestSettingsEditing(unittest.TestCase):
 
     def make_dialog(self):
         dialog = SimpleNamespace(settings=self.settings, diag_code_var=Mock(), diag_name_var=Mock(),
-                                 diag_search_var=Mock(), diag_listbox=Mock(), master=Mock(), destroy=Mock())
+                                 diag_search_var=Mock(), diag_listbox=Mock(), master=Mock(), destroy=Mock(),
+                                 _diag_view=[])
         dialog.diag_search_var.get.return_value = ""
         dialog.diag_listbox.curselection.return_value = (0,)
         dialog.refresh_diag_list = lambda: SettingsDialog.refresh_diag_list(dialog)
@@ -134,6 +135,88 @@ class TestSettingsEditing(unittest.TestCase):
         self.assertTrue(storage.save_settings(self.settings))
         dialog.master.refresh_from_settings.assert_called_once()
         dialog.destroy.assert_called_once()
+
+
+class TestSettingsDialogWindow(unittest.TestCase):
+    """실제 설정 창을 띄워 목록 선택 동작을 검증한다."""
+
+    def setUp(self):
+        import tkinter as tk
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        environment = patch.dict(os.environ, {"APPDATA": self.tmp.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk를 시작할 수 없습니다: {exc}")
+        self.addCleanup(self.root.destroy)
+        self.settings = storage.load_settings()
+        self.settings["therapists"][:] = ["홍길동", "김철수"]
+        self.dialog = SettingsDialog(
+            self.root, self.settings, on_change=lambda replacement=None: storage.save_settings(self.settings, replacement)
+        )
+        self.dialog.update()
+
+    def test_list_selection_survives_selecting_text_in_entry(self):
+        import tkinter as tk
+        from tkinter import ttk
+
+        editor = self.dialog.therapist_editor
+        editor.refresh()
+        editor.listbox.selection_set(1)
+        editor._on_select()
+        entry = next(w for w in editor.winfo_children()[1].winfo_children() if isinstance(w, ttk.Entry))
+        entry.focus_force()
+        entry.selection_range(0, tk.END)  # 이름을 고치려고 입력란 글자를 선택
+        self.dialog.update()
+        self.assertEqual(editor.selected_index(), 1)
+        for listbox in (editor.listbox, self.dialog.diag_listbox, self.dialog.recent_region_listbox):
+            self.assertEqual(int(listbox.cget("exportselection")), 0)
+
+    def test_renaming_default_therapist_keeps_it_as_default(self):
+        self.settings["default_therapist"] = self.settings["last_therapist"] = "홍길동"
+        self.assertTrue(storage.save_settings(self.settings))
+        editor = self.dialog.therapist_editor
+        editor.refresh()
+        editor.listbox.selection_set(0)
+        editor.entry_var.set("홍길순")
+        editor.rename()
+        saved = storage.load_settings()
+        self.assertEqual(saved["therapists"], ["홍길순", "김철수"])
+        self.assertEqual(saved["default_therapist"], "홍길순")
+        self.assertEqual(saved["last_therapist"], "홍길순")
+
+    def test_deleting_default_therapist_clears_default(self):
+        self.settings["default_therapist"] = "홍길동"
+        self.assertTrue(storage.save_settings(self.settings))
+        editor = self.dialog.therapist_editor
+        editor.refresh()
+        editor.listbox.selection_set(0)
+        with patch("therapy_chart.settings_dialog.messagebox.askyesno", return_value=True):
+            editor.delete()
+        saved = storage.load_settings()
+        self.assertEqual(saved["therapists"], ["김철수"])
+        self.assertEqual(saved["default_therapist"], "")
+
+    def test_diagnosis_stays_selected_after_favorite_and_update(self):
+        dialog = self.dialog
+        dialog.diag_listbox.selection_set(3)
+        chosen = dict(dialog._selected_diag())
+        dialog.diag_toggle_favorite()
+        selected = dialog._selected_diag()
+        self.assertEqual((selected["code"], selected["name"]), (chosen["code"], chosen["name"]))
+        self.assertTrue(selected["favorite"])
+        dialog.diag_code_var.set(chosen["code"])
+        dialog.diag_name_var.set("바꾼 이름")
+        dialog.diag_update()
+        self.assertEqual(dialog._selected_diag()["name"], "바꾼 이름")
+
+    def test_search_finds_code_typed_with_dot(self):
+        self.dialog.diag_search_var.set("m75.1")
+        self.assertEqual([d["code"] for d in self.dialog._diag_view], ["M751"])
 
 
 if __name__ == "__main__":

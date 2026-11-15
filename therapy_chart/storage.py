@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""사용자 설정 및 등록 데이터의 로컬 저장.
+r"""사용자 설정 및 등록 데이터의 로컬 저장.
 
 - 저장 위치: Windows 표준 사용자 데이터 경로 %APPDATA%\TherapyChart\settings.json
   (다른 OS에서는 홈 폴더 하위 .config/TherapyChart)
@@ -17,6 +17,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -179,6 +180,7 @@ def default_settings() -> Dict:
         # 창 상태
         "remember_geometry": True,
         "window_geometry": "",
+        "window_maximized": False,
         # 복사 성공 시 자동으로 초기화 (다음 환자 입력 준비)
         "auto_reset_after_copy": False,
     }
@@ -203,9 +205,17 @@ def _coerce_settings(merged: Dict) -> Dict:
     defaults = default_settings()
 
     def as_str_list(value):
+        """문자열 목록으로 정리한다. 앞뒤 공백·빈 항목·중복은 없앤다."""
         if not isinstance(value, list):
             return None
-        return [str(v) for v in value if isinstance(v, (str, int, float))]
+        result = []
+        for v in value:
+            if isinstance(v, bool) or not isinstance(v, (str, int, float)):
+                continue
+            text = " ".join(str(v).split())
+            if text and text not in result:
+                result.append(text)
+        return result
 
     # 문자열 리스트 항목
     for key in ("therapists", "purposes", "techniques", "region_favorites", "recent_regions"):
@@ -217,8 +227,13 @@ def _coerce_settings(merged: Dict) -> Dict:
         if not isinstance(merged.get(key), str):
             merged[key] = defaults[key]
 
+    # 목록에 없는 치료사를 기본·마지막 치료사로 남겨두지 않는다.
+    for key in ("default_therapist", "last_therapist"):
+        if merged[key] not in merged["therapists"]:
+            merged[key] = ""
+
     # 불리언 항목
-    for key in ("remember_geometry", "auto_reset_after_copy"):
+    for key in ("remember_geometry", "window_maximized", "auto_reset_after_copy"):
         if not isinstance(merged.get(key), bool):
             merged[key] = defaults[key]
 
@@ -244,11 +259,11 @@ def _coerce_settings(merged: Dict) -> Dict:
                 continue
             item = {
                 "code": _normalize_code_value(d.get("code", "")),
-                "name": str(d.get("name", "")),
+                "name": " ".join(str(d.get("name", "")).split()),
                 "favorite": bool(d.get("favorite", False)),
             }
             key = (item["code"], item["name"])
-            if key in seen:
+            if key in seen or not any(key):
                 continue
             seen.add(key)
             cleaned.append(item)
@@ -264,13 +279,17 @@ def _coerce_settings(merged: Dict) -> Dict:
         for d in recent:
             if not isinstance(d, dict):
                 continue
-            item = {"code": _normalize_code_value(d.get("code", "")), "name": str(d.get("name", ""))}
+            item = {
+                "code": _normalize_code_value(d.get("code", "")),
+                "name": " ".join(str(d.get("name", "")).split()),
+            }
             key = (item["code"], item["name"])
-            if key in seen_recent:
+            if key in seen_recent or not any(key):
                 continue
             seen_recent.add(key)
             cleaned_recent.append(item)
-        merged["recent_diagnoses"] = cleaned_recent
+        merged["recent_diagnoses"] = cleaned_recent[:C.RECENT_LIMIT]
+    merged["recent_regions"] = merged["recent_regions"][:C.RECENT_LIMIT]
 
     return merged
 
@@ -296,7 +315,8 @@ def _load_settings_locked(path: str) -> Dict:
     try:
         with open(path, "rb") as f:
             content = f.read()
-        data = json.loads(content.decode("utf-8"))
+        # 메모장 등으로 저장하며 붙은 BOM은 손상이 아니므로 허용한다.
+        data = json.loads(content.decode("utf-8-sig"))
         if isinstance(data, dict):
             return _Settings(merge_with_defaults(data), hashlib.sha256(content).hexdigest())
         _mark_settings_corrupt(path)
@@ -313,7 +333,7 @@ def _load_settings_locked(path: str) -> Dict:
     legacy = _legacy_settings_file()
     if legacy:
         try:
-            with open(legacy, "r", encoding="utf-8") as f:
+            with open(legacy, "r", encoding="utf-8-sig") as f:
                 old = json.load(f)
             if isinstance(old, dict) and isinstance(old.get("therapists"), list):
                 settings["therapists"] = [str(t) for t in old["therapists"]]
@@ -372,6 +392,22 @@ def reload_settings(settings: Dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 진단명 검색
+# ---------------------------------------------------------------------------
+def diagnosis_matches(diagnosis: Dict, query: str) -> bool:
+    """검색어가 진단코드나 진단명에 들어 있으면 True. 대소문자와 코드의 점(.)은 구분하지 않는다.
+
+    저장된 코드는 점 없는 표기(M751)이므로 "m75.1"로 검색해도 찾을 수 있어야 한다.
+    """
+    query = " ".join((query or "").lower().split())
+    if not query:
+        return True
+    code = str(diagnosis.get("code", "")).lower()
+    name = str(diagnosis.get("name", "")).lower()
+    return query in f"{code} {name}" or query.replace(".", "") in code
+
+
+# ---------------------------------------------------------------------------
 # 최근 사용 목록
 # ---------------------------------------------------------------------------
 def push_recent(items: List, value, limit: int = C.RECENT_LIMIT) -> List:
@@ -386,6 +422,8 @@ def push_recent(items: List, value, limit: int = C.RECENT_LIMIT) -> List:
 # 형식: 한 줄에 "진단코드,진단명" (헤더 행은 자동으로 건너뜀)
 # ---------------------------------------------------------------------------
 _CSV_HEADER_WORDS = {"code", "진단코드", "코드", "diagnosis_code"}
+# 진단코드로 볼 수 있는 모양 (예: M751, M75.1, S134A). 한 칸짜리 줄을 코드/진단명으로 나눌 때 쓴다.
+_CSV_CODE_PATTERN = re.compile(r"[A-Za-z][0-9]{2}[0-9A-Za-z.]*")
 
 
 def import_diagnoses_csv(path: str) -> Tuple[List[Dict], int]:
@@ -409,8 +447,12 @@ def import_diagnoses_csv(path: str) -> Tuple[List[Dict], int]:
                         continue
                     if cells[0].lower() in _CSV_HEADER_WORDS:
                         continue  # 헤더 행
-                    code = _normalize_code_value(cells[0] if cells else "")
-                    name = cells[1] if len(cells) > 1 else ""
+                    name = " ".join(cells[1].split()) if len(cells) > 1 else ""
+                    if not name and not _CSV_CODE_PATTERN.fullmatch(cells[0]):
+                        # 진단명만 한 칸에 적은 줄: 코드로 바꾸지 않고 진단명으로 읽는다.
+                        code, name = "", " ".join(cells[0].split())
+                    else:
+                        code = _normalize_code_value(cells[0])
                     if not (code or name):
                         skipped += 1
                         continue
@@ -470,7 +512,7 @@ def restore_from(path: str) -> Dict:
     형식이 잘못된 파일이면 ValueError를 발생시킨다.
     (호출 측은 예외 발생 시 기존 데이터를 그대로 유지해야 한다.)
     """
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         data = json.load(f)
     if not isinstance(data, dict):
         raise ValueError("백업 파일 형식이 올바르지 않습니다.")

@@ -21,6 +21,23 @@ ITEM_SEPARATOR = ", "
 THERAPIST_SUFFIX = "물리치료사"
 
 
+def clean_text(value: str) -> str:
+    """앞뒤 공백을 없애고 줄바꿈·탭·연속 공백을 공백 한 칸으로 바꾼다.
+
+    다른 프로그램에서 복사해 붙여넣은 값에 줄바꿈이 섞여도
+    진료 기록의 '항목당 한 줄' 형식이 깨지지 않게 한다.
+    """
+    return " ".join((value or "").split())
+
+
+def normalize_number(value: str) -> str:
+    """숫자 문자열의 앞자리 0을 없앤다. 예: "007" → "7". 숫자가 아니면 그대로 둔다."""
+    value = (value or "").strip()
+    if value.isascii() and value.isdecimal():
+        return str(int(value))
+    return value
+
+
 def normalize_code(code: str) -> str:
     """진단코드를 정리한다.
 
@@ -42,7 +59,7 @@ def diagnosis_display(code: str, name: str) -> str:
     - 진단코드만 있으면: "M751"
     """
     code = normalize_code(code)
-    name = (name or "").strip()
+    name = clean_text(name)
     if code and name:
         return f"{code} {name}"
     return code or name
@@ -53,7 +70,7 @@ def therapist_display(name: str) -> str:
 
     이름에 이미 '물리치료사'가 포함되어 있으면 중복해서 붙이지 않는다.
     """
-    name = (name or "").strip()
+    name = clean_text(name)
     if not name:
         return ""
     if THERAPIST_SUFFIX in name:
@@ -68,7 +85,7 @@ def format_date(date: datetime.date) -> str:
 
 def join_items(items: List[str]) -> str:
     """선택 항목들을 쉼표와 공백으로 구분해 연결한다."""
-    return ITEM_SEPARATOR.join(s for s in items if s)
+    return ITEM_SEPARATOR.join(s for s in (clean_text(item) for item in items) if s)
 
 
 def is_valid_vas(value: str) -> bool:
@@ -141,6 +158,8 @@ def invalid_values_in_text(text: str) -> List[str]:
 
     eval_text = values.get(C.LABEL_EVAL, "")
     for value in re.findall(r"\bVAS\b([^,\n]*)", eval_text, flags=re.IGNORECASE):
+        if not any(ch.isdigit() for ch in value):
+            continue  # "VAS 변화 없음"처럼 수치가 없는 서술은 검사 대상이 아니다
         match = re.fullmatch(r"\s*([0-9]+)\s*(?:→|->)\s*([0-9]+)\s*", value)
         if match is None or not all(is_valid_vas(v) for v in match.groups()):
             invalid.append(f"VAS({C.MIN_VAS}~{C.MAX_VAS})")
@@ -179,9 +198,8 @@ class TherapyRecord:
             parts.append(f"주관적 호전도 {self.improvement.strip()}")
         before, after = self.vas_before.strip(), self.vas_after.strip()
         if is_valid_vas(before) and is_valid_vas(after):
-            parts.append(f"VAS {before}→{after}")
-        if self.eval_note.strip():
-            parts.append(self.eval_note.strip())
+            parts.append(f"VAS {normalize_number(before)}→{normalize_number(after)}")
+        parts.append(self.eval_note)
         return join_items(parts)
 
     # ------------------------------------------------------------------
@@ -192,14 +210,14 @@ class TherapyRecord:
 
         각 항목은 '라벨 : 값' 형식 한 줄씩이며 빈 줄은 넣지 않는다.
         """
-        count = self.count.strip()
+        count = normalize_number(self.count)
         lines = [
             f"{C.LABEL_DIAGNOSIS} : {diagnosis_display(self.diagnosis_code, self.diagnosis_name)}",
             f"{C.LABEL_PURPOSE} : {join_items(self.purposes)}",
             f"{C.LABEL_THERAPIST} : {therapist_display(self.therapist)}",
             f"{C.LABEL_DATE} : {format_date(self.date)}",
             f"{C.LABEL_COUNT} : {count + '회차' if count else ''}",
-            f"{C.LABEL_REGION} : {self.region.strip()}",
+            f"{C.LABEL_REGION} : {clean_text(self.region)}",
             f"{C.LABEL_TECHNIQUE} : {join_items(self.techniques)}",
         ]
         # 치료 효과 평가는 입력이 있을 때만 출력 (시행기법과 치료시간 사이)

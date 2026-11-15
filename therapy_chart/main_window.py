@@ -29,6 +29,17 @@ TITLE_FONT = T.TITLE_FONT
 MISSING_COLOR = T.DANGER
 OK_COLOR = T.SUCCESS
 
+# 프로그램을 켜 둔 채 날짜가 바뀌었는지 확인하는 간격
+DAY_CHECK_MS = 30_000
+
+
+def _log_current_exception() -> None:
+    """처리 중인 예외를 error.log에 남긴다."""
+    import traceback
+    from .main import _log_error
+
+    _log_error(traceback.format_exc())
+
 
 class App(tk.Tk):
     def __init__(self):
@@ -50,6 +61,9 @@ class App(tk.Tk):
         self.count_var = tk.StringVar(value="1")
         self.region_var = tk.StringVar()
         self.date_selected: datetime.date = datetime.date.today()
+        # 날짜를 따로 고르지 않았으면, 프로그램을 켜 둔 채 날이 바뀌어도 오늘을 따라간다.
+        self._date_follows_today = True
+        self._today_seen = self.date_selected
         # 치료 효과 평가 (선택 입력)
         self.improvement_var = tk.StringVar()  # 호전/유지/악화 (빈값 = 미선택)
         self.vas_before_var = tk.StringVar()
@@ -59,9 +73,14 @@ class App(tk.Tk):
         # 미리보기 상태: "auto"(자동 생성) / "editing"(직접 수정 중) / "manual"(수정 내용 유지)
         self.preview_mode = "auto"
         self._left_changed_in_edit = False  # 직접 수정 중 왼쪽 입력 변경 여부
+        self._edit_base_text: Optional[str] = None  # 직접 수정을 시작한 시점의 자동 생성 내용
         self._suppress_code_normalize = False
+        self._autofilled_diag: Optional[tuple] = None  # 코드로 자동 입력한 (진단코드, 진단명)
         self._marked_missing: List[str] = []  # 현재 강조 표시된 누락 항목
         self._recent_diags: List[Dict] = []
+
+        self._status_after: Optional[str] = None
+        self._pending_after: Dict[str, str] = {}  # 예약 작업 이름 → after id (종료 시 취소)
 
         self.build_ui()
         self._bind_shortcuts()
@@ -69,7 +88,7 @@ class App(tk.Tk):
         self.refresh_from_settings()
         self.update_preview()
         if self._settings_load_warning:
-            self.after(300, self._show_settings_load_warning)
+            self._pending_after["load_warning"] = self.after(300, self._show_settings_load_warning)
 
         # 입력 변경 감지 → 미리보기 갱신
         self.diag_code_var.trace_add("write", self._on_code_changed)
@@ -86,7 +105,20 @@ class App(tk.Tk):
         self.region_var.trace_add("write", lambda *_: self._refresh_region_fav_button())
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.after(300, self.first_run_check)
+        self._pending_after["first_run"] = self.after(300, self.first_run_check)
+        self._pending_after["day_check"] = self.after(DAY_CHECK_MS, self._day_check_tick)
+
+    def destroy(self) -> None:
+        """창을 닫기 전에 예약해 둔 작업을 취소한다."""
+        for after_id in [*self._pending_after.values(), self._status_after]:
+            if after_id:
+                try:
+                    self.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+        self._pending_after.clear()
+        self._status_after = None
+        super().destroy()
 
     def report_callback_exception(self, exc, val, tb):
         """버튼 클릭·trace 등 Tkinter 콜백에서 발생한 예외를 로그로 남기고 안내한다."""
@@ -173,7 +205,10 @@ class App(tk.Tk):
         code_row = ttk.Frame(f_diag, style="Card.TFrame")
         code_row.pack(fill="x")
         ttk.Label(code_row, text="진단코드:", style="Card.TLabel").pack(side="left")
-        ttk.Entry(code_row, textvariable=self.diag_code_var, width=9, font=BASE_FONT).pack(side="left", padx=(4, 10))
+        code_entry = ttk.Entry(code_row, textvariable=self.diag_code_var, width=9, font=BASE_FONT)
+        code_entry.pack(side="left", padx=(4, 10))
+        code_entry.bind("<FocusOut>", self._autofill_diag_name)
+        code_entry.bind("<Return>", self._autofill_diag_name)
         ttk.Label(code_row, text="진단명:", style="Card.TLabel").pack(side="left")
         ttk.Entry(code_row, textvariable=self.diag_name_var, font=BASE_FONT).pack(
             side="left", fill="x", expand=True, padx=(4, 0)
@@ -190,9 +225,9 @@ class App(tk.Tk):
         search_row.pack(fill="x", pady=(7, 0))
         ttk.Label(search_row, text="🔍 저장 목록 검색:", style="Card.TLabel").pack(side="left")
         self.diag_search_var = tk.StringVar()
-        ttk.Entry(search_row, textvariable=self.diag_search_var, font=BASE_FONT).pack(
-            side="left", fill="x", expand=True, padx=(4, 0)
-        )
+        search_entry = ttk.Entry(search_row, textvariable=self.diag_search_var, font=BASE_FONT)
+        search_entry.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        search_entry.bind("<Return>", self._pick_first_diag)
         self.diag_search_var.trace_add("write", lambda *_: self.refresh_diag_list())
 
         list_row = ttk.Frame(f_diag, style="Card.TFrame")
@@ -209,6 +244,7 @@ class App(tk.Tk):
             highlightbackground=T.BORDER,
             highlightthickness=1,
             relief="flat",
+            exportselection=False,
         )
         diag_sb = ttk.Scrollbar(list_row, orient="vertical", command=self.diag_list.yview)
         self.diag_list.configure(yscrollcommand=diag_sb.set)
@@ -218,7 +254,7 @@ class App(tk.Tk):
         self._diag_view: List[Dict] = []
         ttk.Label(
             f_diag,
-            text="목록 클릭 시 자동 입력 · 추가/삭제/즐겨찾기/CSV 관리는 [설정]",
+            text="목록 클릭 또는 검색 후 Enter로 입력 · 목록 관리는 [설정]",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(5, 0))
 
@@ -253,6 +289,13 @@ class App(tk.Tk):
         f_date = self._create_section(parent, "④ 시행일시", C.LABEL_DATE)
         self.calendar = CalendarWidget(f_date, on_select=self.on_date_selected)
         self.calendar.pack()
+        today_row = ttk.Frame(f_date, style="Card.TFrame")
+        today_row.pack(fill="x", pady=(6, 0))
+        ttk.Button(today_row, text="오늘", width=6, command=self.select_today).pack(side="left")
+        self.date_hint_lbl = ttk.Label(
+            today_row, style="Card.TLabel", foreground=T.WARNING, font=T.SMALL_BOLD_FONT
+        )
+        self.date_hint_lbl.pack(side="left", padx=(8, 0))
 
     def _build_treatment_info_section(self, parent) -> None:
         # ⑤ 시행횟수 / 시행부위 / 치료시간 ------------------------------
@@ -362,10 +405,19 @@ class App(tk.Tk):
         )
 
     def _bind_shortcuts(self) -> None:
-        self.bind_all("<Control-Shift-C>", lambda _e: self.copy_output())
-        self.bind_all("<Control-Shift-c>", lambda _e: self.copy_output())
-        self.bind_all("<Control-r>", lambda _e: self.reset_inputs())
-        self.bind_all("<Control-R>", lambda _e: self.reset_inputs())
+        self.bind_all("<Control-Shift-C>", lambda _e: self._run_shortcut(self.copy_output))
+        self.bind_all("<Control-Shift-c>", lambda _e: self._run_shortcut(self.copy_output))
+        self.bind_all("<Control-r>", lambda _e: self._run_shortcut(self.reset_inputs))
+        self.bind_all("<Control-R>", lambda _e: self._run_shortcut(self.reset_inputs))
+
+    def _run_shortcut(self, action) -> None:
+        """메인 창에서 누른 단축키만 실행한다. 설정 창이 열려 있을 때는 무시한다."""
+        try:
+            focused = self.focus_get()
+        except KeyError:  # 드롭다운 목록이 열려 있을 때 Tk가 내는 오류
+            focused = None
+        if focused is None or focused.winfo_toplevel() is self:
+            action()
 
     # ==================================================================
     # 설정 연동 / 갱신
@@ -468,6 +520,12 @@ class App(tk.Tk):
             self._suppress_code_normalize = True
             self.diag_code_var.set(normalized)
             self._suppress_code_normalize = False
+        # 코드로 자동 입력한 진단명은 코드가 바뀌면 지운다 (코드와 진단명이 어긋난 기록 방지).
+        if self._autofilled_diag and normalized != self._autofilled_diag[0]:
+            filled_name = self._autofilled_diag[1]
+            self._autofilled_diag = None
+            if self.diag_name_var.get() == filled_name:
+                self.diag_name_var.set("")
         self.update_preview()
 
     def refresh_diag_list(self) -> None:
@@ -478,17 +536,38 @@ class App(tk.Tk):
         ordered = [d for d in diagnoses if d.get("favorite")] + [d for d in diagnoses if not d.get("favorite")]
         for d in ordered:
             text = f"{d.get('code', '')} {d.get('name', '')}".strip()
-            if query and query not in text.lower():
+            if query and not storage.diagnosis_matches(d, query):
                 continue
             star = "★ " if d.get("favorite") else "    "
             self.diag_list.insert("end", star + text)
             self._diag_view.append(d)
+
+    def _pick_first_diag(self, _e=None) -> None:
+        """검색어를 입력하고 Enter를 누르면 목록 맨 위 진단명을 입력한다."""
+        if self.diag_search_var.get().strip() and self._diag_view:
+            self.diag_list.selection_clear(0, "end")
+            self.diag_list.selection_set(0)
+            self._on_diag_list_selected()
+
+    def _autofill_diag_name(self, _e=None) -> None:
+        """진단코드만 입력했을 때, 저장 목록에 그 코드가 하나뿐이면 진단명을 채운다."""
+        code = R.normalize_code(self.diag_code_var.get())
+        if not code or self.diag_name_var.get().strip():
+            return
+        names = [
+            d.get("name", "") for d in self.settings["diagnoses"]
+            if d.get("code") == code and d.get("name")
+        ]
+        if len(names) == 1:
+            self.diag_name_var.set(names[0])
+            self._autofilled_diag = (code, names[0])
 
     def _on_diag_list_selected(self, _e=None) -> None:
         sel = self.diag_list.curselection()
         if not sel:
             return
         d = self._diag_view[sel[0]]
+        self._autofilled_diag = None
         self.diag_code_var.set(d.get("code", ""))
         self.diag_name_var.set(d.get("name", ""))
 
@@ -497,6 +576,7 @@ class App(tk.Tk):
         if idx < 0 or idx >= len(self._recent_diags):
             return
         d = self._recent_diags[idx]
+        self._autofilled_diag = None
         self.diag_code_var.set(d.get("code", ""))
         self.diag_name_var.set(d.get("name", ""))
 
@@ -532,7 +612,49 @@ class App(tk.Tk):
     # ==================================================================
     def on_date_selected(self, date: datetime.date) -> None:
         self.date_selected = date
+        self._date_follows_today = date == datetime.date.today()
+        self._refresh_date_hint()
         self.update_preview()
+
+    def select_today(self) -> None:
+        today = datetime.date.today()
+        self.calendar.set_date(today)
+        self.on_date_selected(today)
+
+    def _refresh_date_hint(self) -> None:
+        """선택한 날짜가 오늘이 아니면 달력 아래에 알려준다."""
+        days = (self.date_selected - datetime.date.today()).days
+        if days == 0:
+            text = ""
+        elif days < 0:
+            text = f"⚠ 오늘이 아닌 날짜입니다 ({-days}일 전)"
+        else:
+            text = f"⚠ 미래 날짜입니다 ({days}일 후)"
+        self.date_hint_lbl.config(text=text)
+
+    def _sync_today(self) -> bool:
+        """프로그램을 켜 둔 채 날이 바뀌었으면 화면을 맞춘다. 시행일시를 바꿨으면 True."""
+        today = datetime.date.today()
+        if today == self._today_seen:
+            return False
+        self._today_seen = today
+        moved = self._date_follows_today and self.date_selected != today
+        if moved:
+            self.date_selected = today
+            self.calendar.set_date(today)
+        else:
+            self.calendar.draw()  # '오늘' 표시 갱신
+        self._refresh_date_hint()
+        if moved:
+            self.update_preview()
+            self.show_status(
+                f"날짜가 바뀌어 시행일시를 오늘({R.format_date(today)})로 바꿨습니다.", T.WARNING, sticky=True
+            )
+        return moved
+
+    def _day_check_tick(self) -> None:
+        self._sync_today()
+        self._pending_after["day_check"] = self.after(DAY_CHECK_MS, self._day_check_tick)
 
     # ==================================================================
     # 시행부위 즐겨찾기 / 치료 효과 평가
@@ -632,16 +754,19 @@ class App(tk.Tk):
     # ------------------------------------------------------------------
     def toggle_edit_mode(self) -> None:
         if self.preview_mode == "auto" or self.preview_mode == "manual":
+            if self.preview_mode == "auto":
+                self._edit_base_text = self.current_record().build_text()
             self.preview_mode = "editing"
             self._left_changed_in_edit = False
-            self.output.configure(state="normal")
+            self.output.configure(state="normal", undo=True)  # 편집 중 Ctrl+Z 되돌리기
+            self.output.edit_reset()
             self.output.focus_set()
             self.edit_btn.config(text="✔ 편집 종료")
             self.regen_btn.pack(side="right", padx=(0, 6))
             self.show_status("직접 수정 중입니다. 편집이 끝나면 [편집 종료]를 누르세요.", T.WARNING, sticky=True)
         else:  # editing → 편집 종료 (수정 내용 유지, 읽기 전용 전환)
             self.preview_mode = "manual"
-            self.output.configure(state="disabled")
+            self.output.configure(state="disabled", undo=False)
             self.edit_btn.config(text="✏ 직접 수정")
             self.show_status("직접 수정한 내용이 유지됩니다. (자동 갱신 일시 중지)", T.WARNING, sticky=True)
 
@@ -654,9 +779,10 @@ class App(tk.Tk):
             ):
                 return
         self.preview_mode = "auto"
+        self._edit_base_text = None
         self.edit_btn.config(text="✏ 직접 수정")
         self.regen_btn.pack_forget()
-        self.output.configure(state="disabled")
+        self.output.configure(state="disabled", undo=False)
         self.clear_status()
         self.update_preview()
 
@@ -687,6 +813,13 @@ class App(tk.Tk):
     # ==================================================================
     def copy_output(self) -> None:
         try:
+            if self._sync_today():
+                self.show_status(
+                    f"날짜가 바뀌어 시행일시를 오늘({R.format_date(self.date_selected)})로 바꿨습니다. "
+                    "확인 후 다시 복사해주세요.",
+                    T.WARNING, sticky=True,
+                )
+                return
             if self.preview_mode == "auto":
                 rec = self.current_record()
                 missing = rec.missing_fields()
@@ -706,12 +839,35 @@ class App(tk.Tk):
                     ):
                         self.show_status("VAS 치료 전·후를 모두 입력해주세요.", MISSING_COLOR, sticky=True)
                         return
+                if rec.date > datetime.date.today() and not messagebox.askyesno(
+                    "시행일시 확인",
+                    f"시행일시가 미래 날짜({R.format_date(rec.date)})입니다.\n그대로 복사할까요?",
+                    parent=self,
+                ):
+                    self.show_status("시행일시를 확인해주세요.", MISSING_COLOR, sticky=True)
+                    return
                 text = rec.build_text()
             else:
                 text = self.output.get("1.0", "end-1c")
                 if not text.strip():
                     self.show_status("복사할 내용이 없습니다.", MISSING_COLOR)
                     return
+
+                # 직접 수정한 내용은 왼쪽 입력을 따라가지 않는다. 다음 환자 입력으로 왼쪽만 바꾼 채
+                # 이전 환자의 기록을 복사하는 일을 막기 위해 확인한다.
+                if self._edit_base_text is not None and self.current_record().build_text() != self._edit_base_text:
+                    if not messagebox.askyesno(
+                        "직접 수정 내용 확인",
+                        "직접 수정을 시작한 뒤 왼쪽 입력이 바뀌었지만\n"
+                        "미리보기에는 반영되지 않았습니다.\n\n"
+                        "지금 미리보기에 보이는 내용 그대로 복사할까요?\n"
+                        "(왼쪽 입력을 반영하려면 [아니요]를 누른 뒤 [자동 생성으로 갱신])",
+                        parent=self,
+                    ):
+                        self.show_status(
+                            "왼쪽 입력을 반영하려면 [자동 생성으로 갱신]을 누르세요.", T.WARNING, sticky=True
+                        )
+                        return
 
                 missing = R.missing_labels_in_text(text)
                 if missing:
@@ -740,17 +896,18 @@ class App(tk.Tk):
             self.update()  # 클립보드 내용 유지
             saved = self._remember_recents(rec) if self.preview_mode == "auto" else True
             self._update_completion([])
-            if self.preview_mode == "auto" and self.settings.get("auto_reset_after_copy"):
+            if self.settings.get("auto_reset_after_copy"):
                 self.reset_inputs(confirm=False)
                 self.show_status("✔ 복사 완료 — 다음 환자 입력 준비됨", OK_COLOR)
             else:
-                self.show_status("✔ 진료기록이 클립보드에 복사되었습니다.", OK_COLOR)
+                self.show_status("✔ 진료기록이 클립보드에 복사되었습니다. (다음 환자는 초기화: Ctrl+R)", OK_COLOR)
             if not saved:
                 self.show_status(
                     "✔ 복사 완료. 최근 목록은 저장하지 못했습니다. 설정 > 데이터에서 저장 상태를 확인해주세요.",
                     T.WARNING, sticky=True,
                 )
         except Exception:
+            _log_current_exception()
             self.show_status("⚠ 복사 중 문제가 발생했습니다. 다시 시도해주세요.", MISSING_COLOR)
 
     def _remember_recents(self, rec: R.TherapyRecord) -> bool:
@@ -779,6 +936,7 @@ class App(tk.Tk):
         self.diag_code_var.set("")
         self.diag_name_var.set("")
         self.diag_search_var.set("")
+        self.recent_diag_combo.set("")
         self.count_var.set(str(C.MIN_TREATMENT_COUNT))
         self.region_var.set("")
         self.purpose_chips.clear_selection()
@@ -789,7 +947,9 @@ class App(tk.Tk):
         self.vas_after_var.set("")
         self.eval_note_var.set("")
         self.date_selected = datetime.date.today()
+        self._date_follows_today = True
         self.calendar.set_date(self.date_selected)
+        self._refresh_date_hint()
 
         therapists = self.settings["therapists"]
         default = self.settings.get("default_therapist")
@@ -801,9 +961,10 @@ class App(tk.Tk):
             self.therapist_var.set("")
 
         self.preview_mode = "auto"
+        self._edit_base_text = None
         self.edit_btn.config(text="✏ 직접 수정")
         self.regen_btn.pack_forget()
-        self.output.configure(state="disabled")
+        self.output.configure(state="disabled", undo=False)
         self._mark_missing([])
         self.clear_status()
         self.update_preview()
@@ -813,7 +974,7 @@ class App(tk.Tk):
     # ==================================================================
     def show_status(self, text: str, color: str, sticky: bool = False) -> None:
         self.status_lbl.config(text=text, foreground=color)
-        if hasattr(self, "_status_after") and self._status_after:
+        if self._status_after:
             self.after_cancel(self._status_after)
             self._status_after = None
         if not sticky:
@@ -836,9 +997,19 @@ class App(tk.Tk):
             clamped = self._clamp_geometry(geometry, sw, sh)
             if clamped:
                 self.geometry(clamped)
+                self._restore_maximized()
                 return
         x, y = max(0, (sw - width) // 2), max(0, (sh - height) // 2 - 20)
         self.geometry(f"{width}x{height}+{x}+{y}")
+        self._restore_maximized()
+
+    def _restore_maximized(self) -> None:
+        """최대화한 채 종료했으면 다시 최대화한다."""
+        if self.settings.get("remember_geometry", True) and self.settings.get("window_maximized"):
+            try:
+                self.state("zoomed")
+            except tk.TclError:
+                pass  # 'zoomed' 상태가 없는 환경(비Windows)
 
     @staticmethod
     def _clamp_geometry(geometry: str, sw: int, sh: int) -> Optional[str]:
@@ -858,8 +1029,11 @@ class App(tk.Tk):
 
     def on_close(self) -> None:
         try:
-            if self.settings.get("remember_geometry", True) and self.state() == "normal":
-                self.settings["window_geometry"] = self.geometry()
+            if self.settings.get("remember_geometry", True):
+                state = self.state()
+                self.settings["window_maximized"] = state == "zoomed"
+                if state == "normal":
+                    self.settings["window_geometry"] = self.geometry()
             self.settings["last_therapist"] = self.therapist_var.get()
             if not self.save_settings() and not messagebox.askyesno(
                 "설정 저장 실패", "설정 변경을 저장하지 못했습니다.\n저장하지 않고 종료할까요?", parent=self,

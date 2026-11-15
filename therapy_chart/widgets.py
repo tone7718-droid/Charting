@@ -234,7 +234,9 @@ class ScrollableFrame(ttk.Frame):
         # 이 캔버스와 내부 위젯에만 휠 바인딩 (bind_all/unbind_all은
         # 앱 전역 바인딩을 건드리므로 위젯 스코프로 한정한다)
         def bind_wheel(widget):
-            widget.bind("<MouseWheel>", on_mousewheel)
+            # 목록·글상자는 자기 내용을 휠로 스크롤해야 하므로 건드리지 않는다.
+            if not isinstance(widget, (tk.Listbox, tk.Text)):
+                widget.bind("<MouseWheel>", on_mousewheel)
             for child in widget.winfo_children():
                 bind_wheel(child)
 

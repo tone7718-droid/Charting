@@ -63,8 +63,12 @@ class PreviewPanel(ttk.Frame):
         preview_card = tk.Frame(self, bg=T.CARD_BG, highlightbackground=T.BORDER, highlightthickness=1)
         preview_card.pack(fill="both", expand=True)
 
+        # width/height=1: 글상자가 기본 크기(80×24글자)를 요구하면 왼쪽 입력 영역이 좁아져
+        # 달력이 잘린다. 크기는 좌우 분할(50:50)과 창 크기에 맡긴다.
         self.output = tk.Text(
             preview_card,
+            width=1,
+            height=1,
             font=T.PREVIEW_FONT,
             wrap="word",
             relief="flat",

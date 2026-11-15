@@ -1,5 +1,5 @@
 ﻿; Inno Setup 설치 프로그램 스크립트
-; 빌드: ISCC.exe /DAppVersion=2.1.3 installer\TherapyChart.iss
+; 빌드: ISCC.exe /DAppVersion=2.1.5 installer\TherapyChart.iss
 ;   (dist\TherapyChart.exe 빌드 후 실행. CI는 constants.APP_VERSION을 읽어 주입)
 ; 결과: installer\Output\TherapyChartSetup.exe
 
@@ -23,6 +23,9 @@ Compression=lzma2
 SolidCompression=yes
 DisableProgramGroupPage=yes
 PrivilegesRequiredOverridesAllowed=dialog
+
+[Languages]
+Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "바탕화면 바로가기 만들기"; GroupDescription: "추가 작업:"
