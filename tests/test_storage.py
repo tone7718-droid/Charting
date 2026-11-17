@@ -306,6 +306,33 @@ class TestHandEditedSettings(StorageTestCase):
         self.assertIs(storage.merge_with_defaults({"window_maximized": True})["window_maximized"], True)
 
 
+class TestAutoResetMigration(StorageTestCase):
+    """v2.1.6부터 '복사 후 자동 초기화'를 기본으로 켠다."""
+
+    def _write(self, data):
+        with open(storage.settings_file(), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+
+    def test_new_install_turns_auto_reset_on(self):
+        self.assertIs(storage.load_settings()["auto_reset_after_copy"], True)
+
+    def test_old_settings_are_switched_on_once(self):
+        for old in ({"version": 1, "auto_reset_after_copy": False}, {"auto_reset_after_copy": False}):
+            with self.subTest(old=old):
+                self._write({**old, "therapists": ["홍길동"]})
+                loaded = storage.load_settings()
+                self.assertIs(loaded["auto_reset_after_copy"], True)
+                self.assertEqual(loaded["therapists"], ["홍길동"])
+                self.assertEqual(loaded["version"], storage.SETTINGS_VERSION)
+
+    def test_turning_it_off_after_upgrade_is_kept(self):
+        self._write({"version": 1, "auto_reset_after_copy": False})
+        settings = storage.load_settings()
+        settings["auto_reset_after_copy"] = False  # 업데이트 후 사용자가 직접 끔
+        self.assertTrue(storage.save_settings(settings))
+        self.assertIs(storage.load_settings()["auto_reset_after_copy"], False)
+
+
 class TestDiagnosisSearch(unittest.TestCase):
     def test_matches_code_with_or_without_dot_and_name(self):
         diagnosis = {"code": "M751", "name": "회전근개증후군"}

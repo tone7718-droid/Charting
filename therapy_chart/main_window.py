@@ -951,9 +951,14 @@ class App(tk.Tk):
         self.calendar.set_date(self.date_selected)
         self._refresh_date_hint()
 
+        # 시행자는 환자가 아니라 작업자 정보이므로, 지금 선택한 치료사를 유지한다.
+        # (복사 후 자동 초기화 때마다 치료사를 다시 고르지 않도록)
         therapists = self.settings["therapists"]
+        current = self.therapist_var.get()
         default = self.settings.get("default_therapist")
-        if default and default in therapists:
+        if current in therapists:
+            pass
+        elif default and default in therapists:
             self.therapist_var.set(default)
         elif len(therapists) == 1:
             self.therapist_var.set(therapists[0])
@@ -981,8 +986,11 @@ class App(tk.Tk):
             self._status_after = self.after(2500, self.clear_status)
 
     def clear_status(self) -> None:
+        # 예약된 지우기를 남겨 두면, 곧이어 띄운 고정 안내까지 2.5초 뒤 지워진다.
+        if self._status_after:
+            self.after_cancel(self._status_after)
+            self._status_after = None
         self.status_lbl.config(text="")
-        self._status_after = None
 
     # ==================================================================
     # 종료 처리
@@ -994,7 +1002,7 @@ class App(tk.Tk):
         self.minsize(min(900, width), min(560, height))
         geometry = self.settings.get("window_geometry", "")
         if self.settings.get("remember_geometry", True) and geometry:
-            clamped = self._clamp_geometry(geometry, sw, sh)
+            clamped = self._clamp_geometry(geometry, sw, sh, self._monitor_checker())
             if clamped:
                 self.geometry(clamped)
                 self._restore_maximized()
@@ -1012,13 +1020,47 @@ class App(tk.Tk):
                 pass  # 'zoomed' 상태가 없는 환경(비Windows)
 
     @staticmethod
-    def _clamp_geometry(geometry: str, sw: int, sh: int) -> Optional[str]:
+    def _monitor_checker():
+        """Windows에서 '이 좌표에 실제 모니터가 있는가'를 묻는 함수. 그 외 환경에서는 None."""
+        import sys
+
+        if not sys.platform.startswith("win"):
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            monitor_from_point = ctypes.windll.user32.MonitorFromPoint
+            monitor_from_point.argtypes = [wintypes.POINT, wintypes.DWORD]
+            monitor_from_point.restype = wintypes.HMONITOR
+        except (AttributeError, OSError):
+            return None
+
+        def on_monitor(x: int, y: int) -> bool:
+            # MONITOR_DEFAULTTONULL(0): 어느 모니터에도 없으면 NULL
+            return bool(monitor_from_point(wintypes.POINT(x, y), 0))
+
+        return on_monitor
+
+    @staticmethod
+    def _clamp_geometry(geometry: str, sw: int, sh: int, on_monitor=None) -> Optional[str]:
+        """저장된 창 위치를 화면 안으로 보정한다.
+
+        on_monitor(x, y)로 창의 네 모서리와 제목 표시줄이 모두 실제 모니터 위에 있다고 확인되면
+        보조 모니터 위치(음수 좌표 포함)를 그대로 둔다. 모니터를 뺐으면 주 모니터로 옮긴다.
+        """
         import re
 
-        match = re.fullmatch(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", geometry.strip())
+        match = re.fullmatch(r"(\d+)x(\d+)\+?([+-]?\d+)\+?([+-]?\d+)", geometry.strip())
         if not match:
             return None
         width, height, x, y = (int(v) for v in match.groups())
+        outside_primary = x < 0 or y < 0 or x + width > sw or y + height > sh - 40
+        if on_monitor and outside_primary and width >= 200 and height >= 200:
+            points = [(x + 1, y + 1), (x + width - 2, y + 1), (x + 1, y + height - 2),
+                      (x + width - 2, y + height - 2), (x + width // 2, y + 10)]
+            if all(on_monitor(px, py) for px, py in points):
+                return f"{width}x{height}{x:+d}{y:+d}"
         width = max(min(900, max(1, sw - 80)), min(width, max(1, sw - 40)))
         height = max(min(560, max(1, sh - 120)), min(height, max(1, sh - 80)))
         if x < 0 or x + width > sw:
@@ -1040,6 +1082,11 @@ class App(tk.Tk):
             ):
                 return
         except Exception:
-            self.show_status("⚠ 설정을 저장할 수 없습니다. 설정 상태를 확인해주세요.", MISSING_COLOR, sticky=True)
-            return
+            # 예기치 못한 오류로 저장하지 못해도 프로그램을 닫을 수 있어야 한다.
+            _log_current_exception()
+            if not messagebox.askyesno(
+                "설정 저장 실패", "설정을 저장하지 못했습니다.\n저장하지 않고 종료할까요?", parent=self,
+            ):
+                self.show_status("⚠ 설정을 저장할 수 없습니다. 설정 상태를 확인해주세요.", MISSING_COLOR, sticky=True)
+                return
         self.destroy()

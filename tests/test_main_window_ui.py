@@ -198,6 +198,47 @@ class TestMainWindowBehavior(AppTestCase):
         self.app.diag_code_var.set("M7510")
         self.assertEqual(self.app.diag_name_var.get(), "회전근개증후군")
 
+    def test_reset_keeps_current_therapist(self):
+        self.app.settings["therapists"][:] = ["홍길동", "김철수"]
+        self.app.settings["default_therapist"] = ""
+        self.app.refresh_from_settings()
+        self.app.therapist_var.set("김철수")
+        self.app.reset_inputs(confirm=False)
+        self.assertEqual(self.app.therapist_var.get(), "김철수")
+        self.app.settings["default_therapist"] = "홍길동"  # 기본 치료사가 있어도 지금 작업자를 유지한다
+        self.app.reset_inputs(confirm=False)
+        self.assertEqual(self.app.therapist_var.get(), "김철수")
+        self.app.therapist_var.set("")
+        self.app.reset_inputs(confirm=False)
+        self.assertEqual(self.app.therapist_var.get(), "홍길동")
+
+    def test_clear_status_cancels_pending_clear(self):
+        import time
+
+        self.app.show_status("짧은 안내", "black")
+        self.app.clear_status()
+        self.assertIsNone(self.app._status_after)
+        self.app.show_status("고정 경고", "red", sticky=True)
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            self.app.update()
+            time.sleep(0.05)
+        self.assertEqual(self.app.status_lbl.cget("text"), "고정 경고")
+
+    def test_small_wheel_steps_still_scroll(self):
+        self.app.deiconify()
+        self.app.geometry("1200x500+0+0")
+        self.app.update()
+        left = self.app.nametowidget(self.app.main_paned.panes()[0])
+        canvas = next(w for w in left.winfo_children() if isinstance(w, tk.Canvas))
+        canvas.yview_moveto(0)
+        self.app.update()
+        top = canvas.yview()[0]
+        canvas.event_generate("<MouseWheel>", delta=-30)  # 터치패드처럼 작은 값
+        self.app.update()
+        self.assertGreater(canvas.yview()[0], top)
+        self.app.withdraw()
+
     def test_diagnosis_list_scrolls_itself_and_keeps_selection(self):
         self.app.update_idletasks()
         self.assertEqual(self.app.diag_list.bind("<MouseWheel>"), "")

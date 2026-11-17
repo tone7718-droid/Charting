@@ -27,6 +27,8 @@ from typing import Dict, List, Optional, Tuple
 from . import constants as C
 
 SETTINGS_FILENAME = "settings.json"
+# 설정 파일 형식 버전. 올릴 때 _migrate_settings에 이전 처리를 추가한다.
+SETTINGS_VERSION = 2
 BACKUP_BASENAME = "manual_therapy_helper_backup"
 
 _last_load_warning = ""
@@ -158,7 +160,7 @@ def _normalize_code_value(code: object) -> str:
 def default_settings() -> Dict:
     """최초 실행 시의 기본 설정값."""
     return {
-        "version": 1,
+        "version": SETTINGS_VERSION,
         # 치료사
         "therapists": [],
         "default_therapist": "",
@@ -182,7 +184,7 @@ def default_settings() -> Dict:
         "window_geometry": "",
         "window_maximized": False,
         # 복사 성공 시 자동으로 초기화 (다음 환자 입력 준비)
-        "auto_reset_after_copy": False,
+        "auto_reset_after_copy": True,
     }
 
 
@@ -294,11 +296,24 @@ def _coerce_settings(merged: Dict) -> Dict:
     return merged
 
 
+def _migrate_settings(loaded: Dict) -> None:
+    """이전 버전 형식의 설정을 현재 형식으로 바꾼다."""
+    version = loaded.get("version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 2:
+        # v2.1.6: "복사 후 자동 초기화"를 기본으로 켠다. 이전에는 기본값이 꺼짐이라
+        # 저장된 false는 사용자가 고른 값이 아니므로 한 번만 켠다. 이후 끈 선택은 유지된다.
+        loaded["auto_reset_after_copy"] = True
+    loaded["version"] = SETTINGS_VERSION
+
+
 def merge_with_defaults(loaded: Dict) -> Dict:
     """저장된 설정에 없는 키를 기본값으로 채우고, 값 타입을 검증한다."""
     merged = default_settings()
     for key, value in loaded.items():
         merged[key] = value
+    if "version" not in loaded:
+        merged["version"] = None  # 버전 표시가 없는 아주 오래된 설정도 이전 대상이다
+    _migrate_settings(merged)
     return _coerce_settings(merged)
 
 

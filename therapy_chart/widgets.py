@@ -228,15 +228,18 @@ class ScrollableFrame(ttk.Frame):
         canvas.bind("<Configure>", lambda e: canvas.itemconfigure(inner_id, width=e.width))
 
         def on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            # 터치패드·고해상도 휠은 120보다 작은 값을 보내 0칸이 되므로 최소 1칸은 움직인다.
+            steps = int(-event.delta / 120) or (-1 if event.delta > 0 else 1 if event.delta < 0 else 0)
+            canvas.yview_scroll(steps, "units")
             return "break"
 
         # 이 캔버스와 내부 위젯에만 휠 바인딩 (bind_all/unbind_all은
         # 앱 전역 바인딩을 건드리므로 위젯 스코프로 한정한다)
         def bind_wheel(widget):
             # 목록·글상자는 자기 내용을 휠로 스크롤해야 하므로 건드리지 않는다.
-            if not isinstance(widget, (tk.Listbox, tk.Text)):
+            if not isinstance(widget, (tk.Listbox, tk.Text)) and not getattr(widget, "_wheel_bound", False):
                 widget.bind("<MouseWheel>", on_mousewheel)
+                widget._wheel_bound = True  # type: ignore[attr-defined]
             for child in widget.winfo_children():
                 bind_wheel(child)
 

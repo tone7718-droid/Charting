@@ -155,6 +155,17 @@ class TestCopyAndClose(unittest.TestCase):
             App.on_close(app)
         app.destroy.assert_not_called()
 
+    def test_close_still_possible_after_unexpected_error(self):
+        for confirmed in (False, True):
+            with self.subTest(confirmed=confirmed):
+                app = SimpleNamespace(settings={}, state=Mock(side_effect=RuntimeError("boom")), therapist_var=Mock(),
+                                      save_settings=Mock(), destroy=Mock(), show_status=Mock())
+                with patch("therapy_chart.main_window.messagebox.askyesno", return_value=confirmed) as ask:
+                    App.on_close(app)
+                ask.assert_called_once()
+                self.log_exception.assert_called()
+                self.assertEqual(app.destroy.called, confirmed)
+
     def test_close_can_discard_unsaved_settings(self):
         app = SimpleNamespace(settings={}, state=Mock(return_value="zoomed"), therapist_var=Mock(), save_settings=Mock(return_value=False),
                               destroy=Mock(), show_status=Mock())
@@ -174,6 +185,39 @@ class TestGeometry(unittest.TestCase):
                     width, height, x, y = map(int, re.fullmatch(r"(\d+)x(\d+)\+(\d+)\+(\d+)", result).groups())
                     self.assertLessEqual(x + width, screen[0])
                     self.assertLessEqual(y + height, screen[1] - 40)
+
+    @staticmethod
+    def monitors(*rects):
+        """(left, top, width, height) 모니터들로 '이 좌표에 모니터가 있는가' 함수를 만든다."""
+        return lambda x, y: any(l <= x < l + w and t <= y < t + h for l, t, w, h in rects)
+
+    def test_window_on_secondary_monitor_is_kept(self):
+        primary = (1920, 1080)
+        left = self.monitors((0, 0, 1920, 1080), (-1920, 0, 1920, 1080))
+        self.assertEqual(App._clamp_geometry("1200x800+-1700+100", *primary, left), "1200x800-1700+100")
+        right = self.monitors((0, 0, 1920, 1080), (1920, 0, 1920, 1080))
+        self.assertEqual(App._clamp_geometry("1200x800+2300+100", *primary, right), "1200x800+2300+100")
+
+    def test_window_in_gap_between_uneven_monitors_is_moved(self):
+        # 오른쪽에 세로가 짧은 모니터: 아래쪽은 모니터가 없는 빈 구역이다.
+        uneven = self.monitors((0, 0, 1920, 1080), (1920, 0, 1280, 720))
+        result = App._clamp_geometry("1000x800+2000+100", 1920, 1080, uneven)
+        self.assertEqual(result, "1000x800+460+100")
+
+    def test_window_is_moved_back_when_secondary_monitor_is_gone(self):
+        primary = (1920, 1080)
+        for geometry in ("1200x800+-1700+100", "1200x800+2300+100"):
+            with self.subTest(geometry=geometry):
+                result = App._clamp_geometry(geometry, *primary, self.monitors((0, 0, 1920, 1080)))
+                self.assertEqual(result, "1200x800+360+100")  # 가로만 주 모니터 안으로
+                self.assertEqual(App._clamp_geometry(geometry, *primary), result)  # Windows 외 환경
+
+    @unittest.skipUnless(__import__("sys").platform.startswith("win"), "Windows 전용 API")
+    def test_windows_monitor_check_uses_real_api(self):
+        on_monitor = App._monitor_checker()
+        self.assertIsNotNone(on_monitor)
+        self.assertTrue(on_monitor(1, 1))  # 주 모니터 왼쪽 위
+        self.assertFalse(on_monitor(-100000, -100000))
 
     def test_invalid_geometry_is_ignored(self):
         self.assertIsNone(App._clamp_geometry("invalid", 1920, 1080))

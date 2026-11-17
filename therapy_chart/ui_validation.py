@@ -9,10 +9,13 @@ def is_empty_or_int_in_range(value: str, minimum: int, maximum: int) -> bool:
     """빈 문자열이거나 minimum~maximum 범위의 정수 문자열이면 True.
 
     입력 중간 상태인 빈 문자열은 허용하고, 실제 복사/저장 단계에서 다시 검증한다.
+    공백만 입력한 값은 빈 칸이 아니라 잘못된 입력으로 본다.
     """
-    value = (value or "").strip()
+    value = value or ""
     if value == "":
         return True
+    if value != value.strip():
+        return False
     return is_int_in_range(value, minimum, maximum)
 
 

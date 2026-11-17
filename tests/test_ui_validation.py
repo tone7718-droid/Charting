@@ -6,6 +6,17 @@ import unittest
 from therapy_chart import ui_validation as V
 
 
+class TestBlankInput(unittest.TestCase):
+    def test_spaces_are_not_treated_as_empty(self):
+        from therapy_chart.ui_validation import is_empty_or_int_in_range
+
+        self.assertTrue(is_empty_or_int_in_range("", 1, 600))
+        for value in (" ", "  ", " 5", "5 "):
+            with self.subTest(value=value):
+                self.assertFalse(is_empty_or_int_in_range(value, 1, 600))
+        self.assertTrue(is_empty_or_int_in_range("45", 1, 600))
+
+
 class TestUiValidation(unittest.TestCase):
     def test_empty_or_int_in_range_allows_empty_during_typing(self):
         self.assertTrue(V.is_empty_or_int_in_range("", 1, 10))

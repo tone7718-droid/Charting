@@ -137,6 +137,10 @@ def invalid_values_in_text(text: str) -> List[str]:
     values = _label_values(text)
     invalid: List[str] = []
 
+    # 값이 비어 있는 항목은 누락(missing_labels_in_text)에서 다룬다. 여기서 또 막으면
+    # "그래도 복사할까요?"에 [예]를 눌러도 범위 오류로 복사가 막힌다.
+    values = {label: value for label, value in values.items() if value}
+
     if C.LABEL_DATE in values:
         match = re.fullmatch(r"([0-9]{4})년\s+([0-9]{1,2})월\s+([0-9]{1,2})일", values[C.LABEL_DATE])
         try:
@@ -160,7 +164,10 @@ def invalid_values_in_text(text: str) -> List[str]:
     for value in re.findall(r"\bVAS\b([^,\n]*)", eval_text, flags=re.IGNORECASE):
         if not any(ch.isdigit() for ch in value):
             continue  # "VAS 변화 없음"처럼 수치가 없는 서술은 검사 대상이 아니다
-        match = re.fullmatch(r"\s*([0-9]+)\s*(?:→|->)\s*([0-9]+)\s*", value)
+        # "VAS 6→3", "VAS: 6 -> 3", "VAS 6점→3점", "VAS 6/10 → 3/10" 형태를 허용한다.
+        match = re.fullmatch(
+            r"\s*:?\s*([0-9]+)\s*(?:점|/\s*10)?\s*(?:→|->)\s*([0-9]+)\s*(?:점|/\s*10)?\s*", value
+        )
         if match is None or not all(is_valid_vas(v) for v in match.groups()):
             invalid.append(f"VAS({C.MIN_VAS}~{C.MAX_VAS})")
             break

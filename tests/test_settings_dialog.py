@@ -201,6 +201,37 @@ class TestSettingsDialogWindow(unittest.TestCase):
         self.assertEqual(saved["therapists"], ["김철수"])
         self.assertEqual(saved["default_therapist"], "")
 
+    def _minutes_spinbox(self):
+        from tkinter import ttk
+
+        def find(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, ttk.Spinbox):
+                    return child
+                found = find(child)
+                if found:
+                    return found
+        return find(self.dialog)
+
+    def test_minutes_arrow_saves_once(self):
+        calls = []
+        original = self.dialog.on_change
+        self.dialog.on_change = lambda replacement=None: calls.append(1) or original(replacement)
+        spin = self._minutes_spinbox()
+        spin.event_generate("<<Increment>>")
+        self.dialog.update()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(storage.load_settings()["treatment_minutes"], 31)
+
+    def test_blank_minutes_are_restored_when_leaving_the_field(self):
+        self.dialog.minutes_var.set("")
+        self.assertEqual(self.settings["treatment_minutes"], 30)
+        self._minutes_spinbox().event_generate("<FocusOut>")
+        self.assertEqual(self.dialog.minutes_var.get(), "30")
+
+    def test_auto_reset_checkbox_is_on_for_new_settings(self):
+        self.assertTrue(self.dialog.auto_reset_var.get())
+
     def test_diagnosis_stays_selected_after_favorite_and_update(self):
         dialog = self.dialog
         dialog.diag_listbox.selection_set(3)

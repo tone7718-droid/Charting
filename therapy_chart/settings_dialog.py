@@ -535,7 +535,7 @@ class SettingsDialog(tk.Toplevel):
             variable=self.remember_geometry_var, command=self._geometry_option_changed,
         ).pack(anchor="w")
 
-        self.auto_reset_var = tk.BooleanVar(value=bool(self.settings.get("auto_reset_after_copy", False)))
+        self.auto_reset_var = tk.BooleanVar(value=bool(self.settings.get("auto_reset_after_copy", True)))
         ttk.Checkbutton(
             tab, text="복사 성공 시 자동으로 초기화 (다음 환자 입력 준비)",
             variable=self.auto_reset_var, command=self._auto_reset_option_changed,
@@ -560,7 +560,8 @@ class SettingsDialog(tk.Toplevel):
             ),
             "%P",
         )
-        ttk.Spinbox(
+        # 화살표 클릭도 minutes_var를 바꾸므로 저장은 아래 trace 한 곳에서만 한다.
+        minutes_spin = ttk.Spinbox(
             minutes_row,
             from_=C.MIN_TREATMENT_MINUTES,
             to=C.MAX_TREATMENT_MINUTES,
@@ -569,8 +570,9 @@ class SettingsDialog(tk.Toplevel):
             validate="key",
             validatecommand=minutes_validate,
             font=BASE_FONT,
-            command=self._minutes_changed,
-        ).pack(side="left", padx=(4, 6))
+        )
+        minutes_spin.pack(side="left", padx=(4, 6))
+        minutes_spin.bind("<FocusOut>", lambda _e: self._restore_minutes_display())
         ttk.Label(
             minutes_row,
             text=f"(기본 30분 — {C.MIN_TREATMENT_MINUTES}~{C.MAX_TREATMENT_MINUTES}분)",
@@ -587,11 +589,17 @@ class SettingsDialog(tk.Toplevel):
 
     def _minutes_changed(self) -> None:
         value = self.minutes_var.get().strip()
-        if not value:
-            return
-        if V.is_int_in_range(value, C.MIN_TREATMENT_MINUTES, C.MAX_TREATMENT_MINUTES):
+        if not V.is_int_in_range(value, C.MIN_TREATMENT_MINUTES, C.MAX_TREATMENT_MINUTES):
+            return  # 입력 중(빈칸 등)에는 저장하지 않는다. 칸을 벗어나면 저장된 값으로 되돌린다.
+        if int(value) != self.settings.get("treatment_minutes"):
             self.settings["treatment_minutes"] = int(value)
             self.changed()
+
+    def _restore_minutes_display(self) -> None:
+        """비워 두거나 잘못 입력한 채 칸을 벗어나면, 실제 저장된 치료시간을 다시 보여준다."""
+        saved = str(self.settings.get("treatment_minutes", C.DEFAULT_TREATMENT_MINUTES))
+        if self.minutes_var.get().strip() != saved:
+            self.minutes_var.set(saved)
 
     def open_data_folder(self) -> None:
         path = os.path.abspath(storage.data_dir())

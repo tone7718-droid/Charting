@@ -247,6 +247,22 @@ class TestCleanOutput(unittest.TestCase):
 
 
 class TestInvalidValuesInText(unittest.TestCase):
+    def test_manual_vas_accepts_colon_points_and_out_of_ten(self):
+        for value in ("VAS: 5 -> 3", "VAS 5점 -> 3점", "VAS 5점→3점", "VAS 5/10 → 3/10", "VAS:6→3"):
+            with self.subTest(value=value):
+                self.assertEqual(R.invalid_values_in_text("치료 효과 평가 : " + value), [])
+        for value in ("VAS: 11 -> 3", "VAS 5점 -> 13점", "VAS 5/10 → 30/10", "VAS 5점점→3"):
+            with self.subTest(value=value):
+                self.assertIn("VAS(0~10)", R.invalid_values_in_text("치료 효과 평가 : " + value))
+
+    def test_empty_values_are_reported_only_as_missing(self):
+        text = "시행일시 : \n시행횟수 : \n치료시간 : "
+        missing = R.missing_labels_in_text(text)
+        self.assertIn("시행횟수", missing)
+        self.assertIn("치료시간", missing)
+        self.assertIn("시행일시", missing)
+        self.assertEqual(R.invalid_values_in_text(text), [])
+
     def test_manual_vas_mention_without_numbers_is_allowed(self):
         for value in ("VAS 6→3, 야간통 VAS 변화 없음", "VAS 측정 거부", "주관적 호전도 유지, VAS 동일"):
             with self.subTest(value=value):
